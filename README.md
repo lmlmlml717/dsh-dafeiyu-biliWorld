@@ -1,9 +1,9 @@
 # dsh-dafeiyu-biliWorld
 
-> 给 [DSH](https://github.com/deepseek-ai) 的一个「世界 + B 站自动化」插件：她会记住你说过的话、有自己的房间和作息，也会按作息去 B 站刷视频、深读、转发动态、发评论。
->
+> 给 [DSH](https://github.com/deepseek-ai) 的一个「世界 + B 站自动化」
+> 加了评论发布、动态发布、视频转发没了
 > 当前版本 **0.8.10** · 基于 **dsh-world**，融合 **dsh-feiyu** 的评论链路与 **dsh-bili-whale** 的 B 站工具链/调度设计。
-
+# 太厉害啦Deepseek大人  与[dsh-world](https://github.com/chenkezhen480/dsh-world)不兼容（大概，我也没试过，这篇md都是deepseek大人写的
 ---
 
 ## 它能做什么
@@ -206,15 +206,6 @@ npm run test:package
 - 测试里不联网、不发真实内容；B 站/QQ 的写操作都有 fake transport 或闸门。
 - 微信适配器另有 Python 离线测试，见 `src/ecosystem/wechat/windows/README.md`。
 
----
-
-## 隐私与安全
-
-- 仓库里**没有任何真实 Cookie、token、QQ 号或本机用户名**；示例一律用 `<...>` 占位。
-- 运行数据（世界、归档、日记、`bili/credentials.json`、日志）都在 `~/.dsh` 下，不要提交。
-- 控制台写接口要求 `x-dsh-world` 头；跨站请求拿不到这个头。
-- 默认干跑；对外写必须显式打开 `guard.dryRun=false` 与 `dailyBili.allowWrite=true`。
-- 发现安全问题请开 issue，不要贴真实凭据。
 
 ---
 
