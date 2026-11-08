@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import type { Agent } from '@deepseek-ai/dsh-agent';
+import { AttachmentId } from '@deepseek-ai/dsh-attachment';
+import { createPhotoStore } from '../src/life/photos.ts';
+import { photoTools } from '../src/life/photoTools.ts';
+
+test('photos only come from the latest user message in the active turn; async reads recheck scope before saving', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'photo-tools-')); const store = createPhotoStore(root);
+  t.after(() => { store.close(); rmSync(root, { recursive: true, force: true }); });
+  const ref = { attachmentId: AttachmentId('image-1'), mediaType: 'image/png' as const, bytes: 4, width: 2, height: 2 };
+  const events = [{ type: 'turn/start', data: {} }, { type: 'user/message', data: { id: 'message-1', source: { kind: 'user' }, content: [{ type: 'image', attachment: ref }] } }] as any[];
+  let inside = true, reads = 0, leaveOnRead = false;
+  const agent = { session: { get seq() { return events.length; }, eventAt: (seq: number) => events[seq] } } as unknown as Agent;
+  const tools = photoTools({ agent, store: () => store, inside: () => inside, attachments: () => ({ readImage: async () => { reads++; if (leaveOnRead) inside = false; return { ref, data: new Uint8Array([1, 2, 3, 4]) }; } } as never) });
+  const run = (name: string, args: object = {}) => tools.find(tool => tool.name === name)!.execute(args as never, { signal: new AbortController().signal } as never);
+  const saved = JSON.parse(await run('keep_photo', { description: '值得记住' }) as string);
+  assert.equal(store.list().total, 1); assert.equal(reads, 1);
+  assert.doesNotMatch(await run('list_photos') as string, /base64|"data"/);
+  await run('forget_photo', { id: saved.id }); assert.equal(store.list().total, 0);
+  leaveOnRead = true;
+  await assert.rejects(run('keep_photo'), /世界工作区/); assert.equal(store.list().total, 0);
+  inside = true; leaveOnRead = false;
+  events.push({ type: 'user/message', data: { id: 'message-2', source: { kind: 'user' }, content: [{ type: 'text', text: '下一条' }] } });
+  await assert.rejects(run('keep_photo'), /最新用户消息/);
+  events.push({ type: 'turn/end', data: {} }); await assert.rejects(run('keep_photo'), /最新用户消息/);
+});

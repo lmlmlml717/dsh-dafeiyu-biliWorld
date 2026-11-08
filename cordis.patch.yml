@@ -1,0 +1,5 @@
+# 插入 dsh-world-bili 行：默认启用，作为一个带 B 站自动化能力的 world 注册到系统
+# 可在 profile 中按 id 覆盖，修改 name、preset 或关闭 lifeline
+- insert:
+    - id: dsh-world-bili
+      name: dsh-world-bili

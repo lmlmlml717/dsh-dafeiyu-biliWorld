@@ -1,2 +1,4 @@
-# Auto detect text files and perform LF normalization
 * text=auto
+*.tgz binary
+# Native bridge builds verify source bytes; keep checkout line endings stable.
+src/ecosystem/wechat/windows/engine/bridge.cpp text eol=lf

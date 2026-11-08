@@ -1,0 +1,139 @@
+{
+  "name": "dsh-world-bili",
+  "version": "0.8.10",
+  "description": "dsh-world + B站自动化：定时刷视频深读转发到动态 prompt 生成文案（含账本/拟人化/刷视频权重）",
+  "license": "MIT",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lmlmlml717/dsh-dafeiyu-biliWorld.git"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./compaction": {
+      "types": "./lib/compaction.d.ts",
+      "default": "./lib/compaction.js"
+    },
+    "./client": "./client/index.js",
+    "./package.json": "./package.json",
+    "./lib/*.js": {
+      "types": "./lib/*.d.ts",
+      "default": "./lib/*.js"
+    },
+    "./lib/*": "./lib/*",
+    "./tools/*": "./tools/*"
+  },
+  "files": [
+    "lib",
+    "client",
+    "tools",
+    "src/ecosystem/wechat/windows",
+    "src/ecosystem/README.md",
+    "templates",
+    "cordis.patch.yml",
+    "README.md",
+    "INSTALL.md",
+    "CONTRIBUTING.md",
+    "CHANGELOG.md",
+    "NOTES.md",
+    "assets",
+    "scripts/enable-tool-free-compaction.ps1",
+    "scripts/repair-profile-patch.mjs",
+    "scripts/update-world.mjs",
+    "scripts/import-stickers.mjs",
+    "scripts/compact-home.mjs"
+  ],
+  "engines": {
+    "node": ">=22.16.0",
+    "dsh": ">=0.2.1-rc.2 <0.3.0-0"
+  },
+  "scripts": {
+    "build": "node -e \"require('fs').rmSync('lib',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test",
+    "test:package": "node scripts/check-package.mjs",
+    "repair:profile": "node scripts/repair-profile-patch.mjs",
+    "prepack": "npm run typecheck && npm run build"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings"
+      ],
+      "platform": "web"
+    },
+    "compatibility": {
+      "dshReleases": {
+        "0.2.1-rc.2": "compatible",
+        "0.2.1-rc.3": "compatible",
+        "0.2.1-rc.5": "compatible",
+        "0.2.2-rc.1": "compatible"
+      }
+    }
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.5 <5.0.0-0",
+    "@deepseek-ai/dsh-agent": ">=0.2.1-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-atomic-write": ">=0.2.1-rc.3 <0.3.0-0",
+    "@deepseek-ai/dsh-attachment": ">=0.2.1-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-commands": ">=0.2.1-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-compaction": ">=0.2.1-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-home-paths": ">=0.2.1-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-llm": ">=0.2.1-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-plugin-manager": ">=0.2.1-rc.3 <0.3.0-0",
+    "@deepseek-ai/dsh-session": ">=0.2.1-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-session-persistence": ">=0.2.1-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-tools": ">=0.2.1-rc.2 <0.3.0-0",
+    "@deepseek-ai/schemastery": ">=3.18.5 <4.0.0-0",
+    "@snowluma/sdk": "^2.2.1"
+  },
+  "peerDependenciesMeta": {
+    "@snowluma/sdk": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-plugin-manager": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-atomic-write": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/dsh-agent": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-agent-loop": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-attachment": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-commands": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-compaction": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-compaction-basic": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-home-paths": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-session": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-session-persistence": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-session-persistence-jsonl": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-session-projection": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-token-meter": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tool-executor-native": "^0.2.2-rc.1",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
+    "@deepseek-ai/schemastery": "3.19.0",
+    "@snowluma/sdk": "2.2.1",
+    "@types/node": "^22.16.0",
+    "typescript": "^5.9.3"
+  }
+}

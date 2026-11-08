@@ -1,0 +1,18 @@
+node_modules/
+/lib/
+
+.host/
+.superpowers/
+*.tgz
+/artifacts/
+
+# 设计笔记/工作日志默认留在本地（可能含个人路径、名字）。
+# 要进 git 的报告放 docs/ 顶层 .md；子目录（截图、日志、实验输出）仍然忽略。
+docs/*
+!docs/*.md
+__pycache__/
+
+# Local scratch (patch scripts, probes)
+/room/
+.agents/skills/find-skills/SKILL.md
+/.trae

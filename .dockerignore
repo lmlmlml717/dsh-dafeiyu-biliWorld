@@ -1,0 +1,6 @@
+# 镜像里不需要的东西：本机的 node_modules、构建产物、仓库元数据、打包出来的 tgz。
+node_modules
+lib
+.git
+.gitignore
+*.tgz
