@@ -240,7 +240,7 @@ cd <repo>
 npm run build
 npm pack
 cd "$env:USERPROFILE\.dsh\profiles\desktop"
-npx -y pnpm@11.28.5 add "file:E:/Git_pack/dsh/dsh-world-bili/dsh-world-bili-<版本>.tgz" --ignore-scripts --config.engine-strict=false
+npx -y pnpm@11.28.5 add "file:<仓库目录>/dsh-world-bili-<版本>.tgz" --ignore-scripts --config.engine-strict=false
 # 重启 DSH
 ```
 

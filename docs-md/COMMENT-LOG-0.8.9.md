@@ -209,7 +209,7 @@ npm pack        # prepack 会再跑 typecheck + build
 
 ## 7. 让新页生效
 
-当前 profile 是 `link:E:/Git_pack/dsh/dsh-world-bili`（`node_modules/dsh-world-bili` 指向仓库），`lib/` 已在 0.8.9 重建，因此：
+当前 profile 是用 `link:` 指向仓库目录的（`node_modules/dsh-world-bili` → 仓库），`lib/` 已在 0.8.9 重建，因此：
 
 1. 重启 DSH（退出桌面端/宿主进程再开；只刷新浏览器不够，宿主代码在 `lib/`）。
 2. 打开 设置 → 世界控制台，应看到「评论」右边多出「评论记录」。

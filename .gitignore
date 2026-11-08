@@ -1,18 +1,31 @@
+# 依赖与构建产物
 node_modules/
 /lib/
-
+/artifacts/
+*.tgz
 .host/
 .superpowers/
-*.tgz
-/artifacts/
+
+# 本地运行数据：世界数据、凭据、日志、Cookie、QQ/SnowLuma 配置——都不进公开仓库
+/worlds/
+/sessions/
+/logs/
+/.dsh/
+credentials.json
+*.log
+*.lnk
+.env
+.env.*
+.DS_Store
+Thumbs.db
 
 # 设计笔记/工作日志默认留在本地（可能含个人路径、名字）。
-# 要进 git 的报告放 docs/ 顶层 .md；子目录（截图、日志、实验输出）仍然忽略。
+# 要进 git 的报告放 docs/ 顶层的 .md；子目录（截图、日志、实验输出）仍然忽略。
 docs/*
 !docs/*.md
 __pycache__/
 
-# Local scratch (patch scripts, probes)
+# 本地脚手架（补丁脚本、探针）
 /room/
 .agents/skills/find-skills/SKILL.md
 /.trae
