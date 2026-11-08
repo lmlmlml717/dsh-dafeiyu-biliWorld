@@ -1563,19 +1563,31 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 搜索种子 keywords —— feed 每轮拿前 2 个去 B站搜索，决定「从哪找候选」；不参与打分。
+     * 搜索种子 keywords —— feed 每轮从种子里按本地日期轮换取 2 个去 B站搜索，决定「从哪找候选」；不参与打分。
      *
      * 编辑模型（B 方案）：输入框就是「当前已保存的值」，改完按「保存」整表覆盖。
      * 想删词就把它从框里删掉再保存；保存后**不清空输入框**，可以接着改。
      * 没动过输入框时，配置从服务端刷新会同步进来；动过之后以你的编辑为准，想放弃改动点「恢复」。
      */
+    /** 本地日历日序号 —— 必须与 tools/lib/seed-rotation.mjs 的 localDayIndex 一致（同一天多轮用同一对）。 */
+    function seedDayIndex() {
+      var d = new Date()
+      return Math.floor((d.getTime() - d.getTimezoneOffset() * 60000) / 86400000)
+    }
+    /** 今天这轮会搜的种子：offset = (日序号 × 2) % n，取 2 个；n 个种子在 ⌈n/2⌉ 天内轮完。 */
+    function seedWindowToday(seeds) {
+      if (!seeds.length) return []
+      var per = Math.min(2, seeds.length)
+      var offset = (seedDayIndex() % seeds.length) * 2 % seeds.length
+      var out = []
+      for (var i = 0; i < per; i++) out.push(seeds[(offset + i) % seeds.length])
+      return out
+    }
     function BiliSeedsCard(props) {
       var cfg = props.cfg || {}
       var saved = Array.isArray(cfg.preferences && cfg.preferences.keywords) ? cfg.preferences.keywords : []
       var savedText = saved.join(' | ')
-      // feed 每轮只取前 2 个种子（tools/commands/feed.mjs 的 slice(0, 2)）；这里把"实际会搜的"和"暂不参与的"分开显示。
-      var usedSeeds = saved.slice(0, 2)
-      var idleSeeds = saved.slice(2)
+      var todaySeeds = seedWindowToday(saved)
       var textState = useState(''), text = textState[0], setText = textState[1]
       var dirtyState = useState(false), dirty = dirtyState[0], setDirty = dirtyState[1]
       var msgState = useState(''), msg = msgState[0], setMsg = msgState[1]
@@ -1604,14 +1616,14 @@ window.__ModuleLoader__.load({
 
       return h(Card, { title: '搜索种子 keywords' },
         h('div', { className: 'dw-muted', style: { fontSize: 11.5, marginTop: -4, marginBottom: 6 } },
-          'feed 每次拿前 2 个去 B站搜索（另外从「口味」里随机抽 2 个话题一起搜）。这里只决定"去哪找"，不参与打分。'),
+          'feed 每轮从种子里轮换取 2 个去 B站搜索（按本地日期平移，n 个种子 ⌈n/2⌉ 天轮完；另外从「口味」里随机抽 2 个话题一起搜）。这里只决定"去哪找"，不参与打分。'),
         h('div', { className: 'dw-muted', style: { fontSize: 11.5, marginBottom: 6 } },
           '当前已保存：' + (savedText || '（空）') + ' · 用 | 分隔，改完保存'),
         saved.length
           ? h('div', { className: 'dw-muted', style: { fontSize: 11.5, marginBottom: 6 } },
-            idleSeeds.length
-              ? '每轮只搜前 2 个：' + usedSeeds.join('、') + '；暂不参与：' + idleSeeds.join('、') + '（共 ' + saved.length + ' 个）'
-              : '每轮都搜：' + usedSeeds.join('、') + '（共 ' + saved.length + ' 个）')
+            saved.length > 2
+              ? '按天轮换：今天搜 ' + todaySeeds.join('、') + '（共 ' + saved.length + ' 个，' + Math.ceil(saved.length / 2) + ' 天轮完）'
+              : '每轮都搜：' + todaySeeds.join('、') + '（共 ' + saved.length + ' 个）')
           : null,
         h('textarea', { rows: 2, placeholder: '例如：asmr | 手工 | 露营', value: text, onChange: function (e) { setText(e.target.value); setDirty(true) } }),
         h('div', { className: 'dw-setting' },

@@ -6,6 +6,7 @@ import { apiGet, makeHeaders } from '../lib/bili-api.mjs'
 import { loadCred } from '../lib/cred.mjs'
 import { config } from '../lib/config.mjs'
 import { dataPath } from '../lib/paths.mjs'
+import { pickSeeds } from '../lib/seed-rotation.mjs'
 import fs from 'node:fs'
 
 // world 可选：有 memory 模块（dsh-feiyu 才有）就拿兴趣加权，没有跳过
@@ -86,11 +87,14 @@ export async function run(argv = []) {
   }
 
   // ② 关键词搜索（要 WBI 签名，bili-api 已处理）：
-  //    固定 keywords + 每轮随机抽 1-2 个偏好词（like 池轮换）—— 内容源源不断，候选不枯竭
+  //    种子按本地日期轮换（tools/lib/seed-rotation.mjs）：每轮 2 个，n 个种子 ⌈n/2⌉ 天全部轮到，
+  //    同一天里的多轮用同一对，便于对着账本看「今天到底搜了哪些」。
+  //    再加每轮随机抽 2 个偏好词（like 池轮换）—— 内容源源不断，候选不枯竭
   //    鱼圈社交：fishCircle 开了就把「大肥鱼」也当关键词搜 —— 同类鱼聚集地的视频进候选
   const likePool = (cfg.preferences?.like ?? []).filter(Boolean)
   const randLikes = [...likePool].sort(() => Math.random() - 0.5).slice(0, 2)
-  const kws = [...new Set([...(cfg.preferences?.keywords ?? []).slice(0, 2), ...randLikes])]
+  const seedPlan = pickSeeds(cfg.preferences?.keywords ?? [])
+  const kws = [...new Set([...seedPlan.picked, ...randLikes])]
   if (cfg.bilibili?.fishCircle?.enabled === true) kws.push('大肥鱼')
   for (const kw of kws) {
     const u = new URL('https://api.bilibili.com/x/web-interface/search/type')
@@ -173,9 +177,10 @@ export async function run(argv = []) {
   usable.sort((a, b) => b.hit - a.hit || b.density - a.density)
   const picked = usable.slice(0, n)
 
-  if (json) { console.log(JSON.stringify({ ok: true, n: picked.length, items: picked }, null, 2)); return }
+  if (json) { console.log(JSON.stringify({ ok: true, n: picked.length, seeds: seedPlan.picked, items: picked }, null, 2)); return }
 
   if (!picked.length) { console.log('（没筛出候选 —— 试试在 preferences.keywords 里加几个搜索词）'); return }
+  console.log(`本轮种子（按本地日轮换）：${seedPlan.picked.length ? seedPlan.picked.join('、') : '（未设置）'}`)
   console.log(`筛出 ${picked.length} 条（偏好命中在前，同分按弹幕密度）：\n`)
   for (const [i, v] of picked.entries()) {
     console.log(`${i + 1}. ${v.title}`)
