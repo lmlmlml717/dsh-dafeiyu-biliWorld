@@ -5,7 +5,11 @@
 > 当前版本 **0.8.10** · 基于 **dsh-world**，融合 **dsh-feiyu** 的评论链路与 **dsh-bili-whale** 的 B 站工具链/调度设计。
 # 太厉害啦Deepseek大人  与[dsh-world](https://github.com/chenkezhen480/dsh-world)不兼容（大概，我也没试过，这篇md都是deepseek大人写的
 ---
-<img width="300" height="300" alt="image" src="https://github.com/user-attachments/assets/767d0883-9993-44d5-ab08-fa2403db3015" />
+<img width="350" height="350" alt="image" src="https://github.com/user-attachments/assets/767d0883-9993-44d5-ab08-fa2403db3015" />
+<img width="350" height="350" alt="image" src="https://github.com/user-attachments/assets/6dc2f239-c8bf-4463-8697-26c41d1cde59" />
+<img width="350" height="350" alt="image" src="https://github.com/user-attachments/assets/48763b43-8835-4cca-9ab4-0312184b4529" />
+
+
 
 ## 它能做什么
 
