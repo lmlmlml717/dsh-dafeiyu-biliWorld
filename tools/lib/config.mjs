@@ -178,3 +178,15 @@ export function config() {
   cfg.__hasUserFile = Object.keys(user).length > 0
   return cfg
 }
+
+/**
+ * 每天能转发几条动态。**只在这里定义一次**，额度闸（quota.check/show）、写入闸（bili-write）、
+ * 面板账本（src/bili/quota.ts）都调它，避免出现两套口径：
+ *   - 面板的「转发视频 日上限」写 bilibili.dynamic.shareDailyMax，有值（>0）就以它为准；
+ *   - 没配才回落 quota.shareDaily（默认 3）——那是 0.8.6 之前就在用的老键，留给手写配置。
+ * 传 `cfg` 便于测试；不传就读当前文件。
+ */
+export function shareDailyLimit(cfg = config()) {
+  const fromUi = Number(cfg?.bilibili?.dynamic?.shareDailyMax ?? 0)
+  return fromUi > 0 ? fromUi : Number(cfg?.quota?.shareDaily ?? 3)
+}

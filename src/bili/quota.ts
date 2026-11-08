@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { dataPath } from '../../tools/lib/paths.mjs'
-import { config } from '../../tools/lib/config.mjs'
+import { config, shareDailyLimit } from '../../tools/lib/config.mjs'
 import type { BiliQuota } from '../console/routes.ts'
 
 function actsFile() { return dataPath('bili-actions.json') }
@@ -19,7 +19,8 @@ export function getBiliQuota(): BiliQuota {
   const share = bilibili.share || {}
   const limits = {
     dyn_pure: Number(dyn.pureDailyMax ?? 2),
-    dyn_share: Number(dyn.shareDailyMax ?? 0),
+    // 与 quota 闸、bili-write 同一口径（shareDailyLimit）：shareDailyMax 优先，没配回落 quota.shareDaily。
+    dyn_share: shareDailyLimit(c),
     like: Number(share.likeDaily ?? 10),
     coin: Number(share.coinDaily ?? 1),
     danmaku: Number(share.dailyMax ?? 5),

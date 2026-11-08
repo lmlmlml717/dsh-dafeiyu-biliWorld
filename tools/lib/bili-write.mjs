@@ -40,7 +40,7 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { apiGet, makeHeaders } from './bili-api.mjs'
 import { loadCred } from './cred.mjs'
-import { config } from './config.mjs'
+import { config, shareDailyLimit } from './config.mjs'
 import * as guard from './guard.mjs'
 import { dataPath } from './paths.mjs'
 
@@ -374,8 +374,8 @@ export async function shareVideoDynamic(bvid, rawText, { go = false, alsoComment
 
   if (guard.dryBlocked()) return { ok: false, dry: true, why: guard.DRY_WHY }
   if (cfg.enabled !== true) return { ok: false, why: 'bilibili.dynamic.enabled 是关的' }
-  // 日上限：优先 bilibili.dynamic.shareDailyMax；没配就回落 quota.shareDaily（默认 3）——两条账本口径对齐
-  const shareMax = Number(cfg.shareDailyMax ?? 0) || Number(root.quota?.shareDaily ?? 0)
+  // 日上限与额度闸同一口径（config.mjs 的 shareDailyLimit）：UI 的 shareDailyMax 优先，没配才回落 quota.shareDaily。
+  const shareMax = shareDailyLimit(root)
   if (shareMax > 0 && !capOk('dyn_share', shareMax)) return { ok: false, why: `今日转发动态额度已用完（${actCount('dyn_share')}/${shareMax}）` }
   const cred = loadCred()
 

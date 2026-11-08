@@ -1,5 +1,7 @@
 /** 读取合并后的配置（不缓存：改完保存立刻生效 —— bili-whale 的实战要求）。 */
 export function config(): any;
+/** 每天能转发几条：UI 的 bilibili.dynamic.shareDailyMax 优先，没配才回落 quota.shareDaily（默认 3）。 */
+export function shareDailyLimit(cfg?: any): number;
 export { configPath } from "./paths.mjs";
 export namespace DEFAULTS {
     namespace identity {

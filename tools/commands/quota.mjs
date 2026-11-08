@@ -8,7 +8,7 @@
 // 纯函数（check / record）供 act 等写通道直接 import：CLI 的 run() 只是薄壳。
 import fs from 'node:fs'
 import { dataPath } from '../lib/paths.mjs'
-import { config } from '../lib/config.mjs'
+import { config, shareDailyLimit } from '../lib/config.mjs'
 
 /** 每次调用都重新解析路径：测试里换 WORLD_BILI_DATA_DIR 也拿得到对的目录。 */
 const quotaFile = () => dataPath('quota.json')
@@ -51,7 +51,8 @@ function withLock(work) {
 export function check({ type = 'share', target = '', cfg, now = Date.now() } = {}) {
   const c = cfg || config()
   const sharesToday = read().log.filter(x => x.share && dayOf(x.at) === dayOf(now)).length
-  const limit = Number(c.quota?.shareDaily ?? 3)
+  // 与 bili-write / 面板同一口径：UI 的 shareDailyMax 优先，没配才回落 quota.shareDaily。
+  const limit = shareDailyLimit(c)
   if (limit > 0 && sharesToday >= limit) return { ok: false, why: `今天已分享 ${sharesToday}/${limit} 条 —— 额度用完，明天再来` }
   if (target) {
     const days = Number(c.quota?.sameVideoDays ?? 7)
@@ -110,7 +111,7 @@ export function run(argv = []) {
   const today = q.log.filter(x => dayOf(x.at) === dayOf())
   const shares = today.filter(x => x.share).length
   const c = config()
-  const limit = Number(c.quota?.shareDaily ?? 3)
+  const limit = shareDailyLimit(c)
   console.log(`今天：记账 ${today.length} 条，其中分享 ${shares}/${limit > 0 ? limit : '∞'} 条`)
   for (const x of today.slice(-10)) console.log(`  ${new Date(x.at).toLocaleTimeString('sv-SE')} ${x.share ? '[分享]' : '[回复]'} ${x.target || ''} ${x.note ?? ''}`)
   if (!today.length) console.log('  （今天还没发过 —— 安静是美德）')

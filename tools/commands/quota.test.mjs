@@ -65,3 +65,26 @@ test('entries older than sameVideoDays no longer block', t => {
   const dir = setup(t, { 'quota.json': logJson([{ at: new Date(Date.now() - 8 * DAY).toISOString(), type: 'share', target: 'BV1', share: true }]) })
   assert.equal(check({ type: 'share', target: 'BV1', cfg: CFG }).ok, true)
 })
+
+// 0.8.11：额度闸与 bili-write / 面板统一口径 —— UI 的 shareDailyMax 优先，quota.shareDaily 只是回落值。
+const today = (n) => logJson(Array.from({ length: n }, (_, i) => ({ at: new Date().toISOString(), type: 'share', target: `BV${i}`, share: true })))
+
+test('the UI shareDailyMax wins over quota.shareDaily when it is set', t => {
+  setup(t, { 'quota.json': today(4) })
+  const cfg = { quota: { sameVideoDays: 7 }, bilibili: { dynamic: { shareDailyMax: 10 } } }
+  const r = check({ type: 'share', target: 'BV9', cfg })
+  assert.equal(r.ok, true, '第 5 条在 UI 设 10 时仍可发')
+  assert.match(r.why, /4\/10/)
+})
+
+test('with no shareDailyMax it falls back to quota.shareDaily', t => {
+  setup(t, { 'quota.json': today(2) })
+  const r = check({ type: 'share', target: 'BV9', cfg: { quota: { shareDaily: 2, sameVideoDays: 7 } } })
+  assert.equal(r.ok, false)
+  assert.match(r.why, /2\/2/)
+
+  // shareDailyMax 显式写 0 = 不启用 UI 值，继续回落 quota.shareDaily（5）
+  const fallback = check({ type: 'share', target: 'BV8', cfg: { quota: { shareDaily: 5, sameVideoDays: 7 }, bilibili: { dynamic: { shareDailyMax: 0 } } } })
+  assert.equal(fallback.ok, true)
+  assert.match(fallback.why, /2\/5/)
+})
