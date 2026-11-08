@@ -45,6 +45,14 @@ test('the client registers the world console settings section under the bundle i
   const shown = text(react.createElement(tested.View, { snap: degraded, error: null, tick: 0, refresh: () => {} }));
   assert.match(shown, /生活线没能启动：life\.json is not valid JSON/); assert.match(shown, /1 条/); assert.doesNotMatch(shown, /生活线未开启/);
   assert.doesNotMatch(shown, /工作区权限/, 'old snapshots omit the workspace permission card');
+  // 搜索种子卡：feed 每轮只取前 2 个是硬编码（tools/commands/feed.mjs:93），UI 得把「会搜的」和「暂不参与的」分开写，
+  // 否则后面保存的种子看起来生效、实际永远搜不到（见 docs/SEED-SEARCH-LIMIT.md）。
+  const seedsCard = (tested as unknown as { BiliSeedsCard: (p: Record<string, unknown>) => unknown }).BiliSeedsCard;
+  const seeds = (keywords: string[]) => text(react.createElement(seedsCard, { cfg: { preferences: { keywords } } }));
+  assert.match(seeds(['asmr', '手工', '露营']), /每轮只搜前 2 个：asmr、手工；暂不参与：露营（共 3 个）/);
+  assert.match(seeds(['asmr', '手工']), /每轮都搜：asmr、手工（共 2 个）/);
+  assert.match(seeds(['asmr']), /每轮都搜：asmr（共 1 个）/);
+  assert.doesNotMatch(seeds([]), /每轮/, '一个种子都没有时不啰嗦这几行');
   const permissions = text(react.createElement(tested.View, { snap: { ...degraded, workspace: { defaultPermission: 'custom-read-only', options: [{ value: 'custom-read-only', name: '我的只读权限' }] } }, error: null, tick: 0, refresh: () => {} }));
   assert.match(permissions, /工作区权限/); assert.match(permissions, /我的只读权限/);
   assert.doesNotThrow(() => text(react.createElement(tested.View, { snap: { worldId: 'fish', timeZone: 'UTC', life: null }, error: null, tick: 0, refresh: () => {} })), 'missing sections never crash the view');

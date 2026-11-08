@@ -1573,6 +1573,9 @@ window.__ModuleLoader__.load({
       var cfg = props.cfg || {}
       var saved = Array.isArray(cfg.preferences && cfg.preferences.keywords) ? cfg.preferences.keywords : []
       var savedText = saved.join(' | ')
+      // feed 每轮只取前 2 个种子（tools/commands/feed.mjs 的 slice(0, 2)）；这里把"实际会搜的"和"暂不参与的"分开显示。
+      var usedSeeds = saved.slice(0, 2)
+      var idleSeeds = saved.slice(2)
       var textState = useState(''), text = textState[0], setText = textState[1]
       var dirtyState = useState(false), dirty = dirtyState[0], setDirty = dirtyState[1]
       var msgState = useState(''), msg = msgState[0], setMsg = msgState[1]
@@ -1604,6 +1607,12 @@ window.__ModuleLoader__.load({
           'feed 每次拿前 2 个去 B站搜索（另外从「口味」里随机抽 2 个话题一起搜）。这里只决定"去哪找"，不参与打分。'),
         h('div', { className: 'dw-muted', style: { fontSize: 11.5, marginBottom: 6 } },
           '当前已保存：' + (savedText || '（空）') + ' · 用 | 分隔，改完保存'),
+        saved.length
+          ? h('div', { className: 'dw-muted', style: { fontSize: 11.5, marginBottom: 6 } },
+            idleSeeds.length
+              ? '每轮只搜前 2 个：' + usedSeeds.join('、') + '；暂不参与：' + idleSeeds.join('、') + '（共 ' + saved.length + ' 个）'
+              : '每轮都搜：' + usedSeeds.join('、') + '（共 ' + saved.length + ' 个）')
+          : null,
         h('textarea', { rows: 2, placeholder: '例如：asmr | 手工 | 露营', value: text, onChange: function (e) { setText(e.target.value); setDirty(true) } }),
         h('div', { className: 'dw-setting' },
           h('button', { className: 'dw-btn primary', disabled: busy, onClick: save }, busy ? '保存中…' : '保存'),
@@ -1917,7 +1926,7 @@ window.__ModuleLoader__.load({
         return ctx.slots.register({ name: 'settings.section', id: 'world-console', order: 28, label: '世界控制台' }, function () { return h(Console) })
       })
     }
-    Object.defineProperty(exports, '__test', { value: { Memory: Memory, MemorySearch: MemorySearch, latest: latest, searchMemory: searchMemory, memoryQuery: memoryQuery, dayStartIso: dayStartIso, WorkspacePermission: WorkspacePermission, CompactAfterReview: CompactAfterReview, Schedule: Schedule, Modules: Modules, HomeApply: HomeApply, PhotoAlbum: PhotoAlbum, Wechat: Wechat, Activity: Activity, Diary: Diary, Qq: Qq, Panel: Panel, View: View, Overview: Overview, PersonaEditor: PersonaEditor, PromptEditor: PromptEditor, BiliCommentLog: BiliCommentLog, loadSnapshot: loadSnapshot, renderPersona: renderPersona }, enumerable: false })
+    Object.defineProperty(exports, '__test', { value: { Memory: Memory, MemorySearch: MemorySearch, latest: latest, searchMemory: searchMemory, memoryQuery: memoryQuery, dayStartIso: dayStartIso, WorkspacePermission: WorkspacePermission, CompactAfterReview: CompactAfterReview, Schedule: Schedule, Modules: Modules, HomeApply: HomeApply, PhotoAlbum: PhotoAlbum, Wechat: Wechat, Activity: Activity, Diary: Diary, Qq: Qq, Panel: Panel, View: View, Overview: Overview, PersonaEditor: PersonaEditor, PromptEditor: PromptEditor, BiliCommentLog: BiliCommentLog, BiliSeedsCard: BiliSeedsCard, loadSnapshot: loadSnapshot, renderPersona: renderPersona }, enumerable: false })
     return exports
   },
 })
