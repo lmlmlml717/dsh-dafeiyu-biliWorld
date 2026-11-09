@@ -1,164 +1,12 @@
-# 分发指南：把 dsh-world-bili 交给别人用
+# 安装指南
 
-> 适用版本：0.8.8（写这份文档时的版本；命令里的 `<版本>` 换成实际版本即可）
-> 读者：你（分发者）和对方（接收者）
-> 相关文档：[INSTALL.md](../INSTALL.md)（安装细节）、[CONFIG-REFERENCE.md](CONFIG-REFERENCE.md)（配置项全表）、[NOTES.md](../NOTES.md)（行为说明）
-
----
-
-## 0. 先选一种分发方式
-
-| 方式 | 适合谁 | 对方要做什么 | 你要给什么 |
-| --- | --- | --- | --- |
-| **Git 仓库** | 会写代码、要跟着改的人 | `git clone` → `npm ci` → `npm run build` → `npm pack` → 装 tgz → 注册进 profile | 仓库地址（或对方能访问的 git） |
-| **npm 包（tgz）** | 只想用、不想构建的人 | 把 tgz 装进 profile → 重启 → 配 cookie/QQ | `npm pack` 出来的 `dsh-world-bili-<版本>.tgz` |
-| **源码 zip** | 没有 git、但能跑命令的人 | 解压 → `npm ci` → `npm run build` → `npm pack` → 装 tgz | 一个排除了 `node_modules`/`lib`/`.git` 的 zip |
-
-三种方式**对方最终都要做同一件事**：让插件出现在 DSH profile 的 `dsh.profile.bundles` 里。
-注意：**不要让对方把 `link:` 直接指向带 `node_modules/@deepseek-ai` 的源码目录**（原因见 3.4）。
-
----
-
-## 1. 上传到 Git：提交什么、不提交什么
-
-### 1.1 必须进 git 的（仓库里已经在跟踪，照常提交）
-
-```
-package.json          package-lock.json        pnpm-lock.yaml        pnpm-workspace.yaml
-tsconfig.json         tsconfig.build.json      cordis.patch.yml
-client/               src/                     tools/                templates/
-scripts/              tests/                   .github/              docs-md/
-README.md  INSTALL.md  NOTES.md  CHANGELOG.md  CONTRIBUTING.md  LICENSE
-.gitignore  .gitattributes  .dockerignore
-```
-
-关键点：
-
-- **`tools/` 必须提交**（32 个文件）。它是 B 站 CLI 的运行时（`tools/bili.mjs`、`tools/lib/*.mjs`），
-  打包时 `files` 字段也把它算进去了；漏了它对方一跑 B 站就 `MODULE_NOT_FOUND`。
-- **`client/index.js` 必须提交**。它不是构建产物，DSH 直接加载这一份；改前端就是改它。
-- **`cordis.patch.yml` 必须提交**。它是 bundle 自带的 patch（`- insert: - id: dsh-world-bili`），
-  对方把包加进 `bundles` 后，这一行由宿主自动插进配置树。
-- **`docs-md/`** 是公开文档；`docs/` 是本地设计笔记/排障记录，不进公开仓库。
-
-### 1.2 绝对不要进 git 的
-
-| 路径 | 原因 |
-| --- | --- |
-| `node_modules/` | 依赖，对方自己装；体积大 |
-| `lib/` | TypeScript 构建产物；对方 `npm run build` 生成（已在 `.gitignore`） |
-| `artifacts/`、`*.tgz` | 打包产物，不进源码仓库 |
-| `.host/`、`room/`、`.trae/`、`.agents/skills/...` | 本地脚手架/个人目录 |
-| `~/.dsh` 里任何东西 | 见下 |
-
-**真正会泄密的是“运行数据”，不是仓库里的源码**，这些永远不要提交、也不要去 `.dsh` 以外：
-
-- `profiles/<name>/cordis.patch.yml` 里你自己填的 `accessToken`、`ownerQQ`、`snowLuma` 路径；
-- `worlds/<id>/bili/credentials.json`（SESSDATA / bili_jct / buvid3）；
-- `worlds/<id>/` 整个目录（归档、日记、相册、聊天记录）；
-- `~/.dsh/logs/*.log`（含个人路径、会话内容）；
-- SnowLuma 的 `config/onebot_<QQ号>.json`（accessToken）。
-
-提交前跑一遍（本仓库实测干净，但每次发版都建议跑）：
-
-```powershell
-cd <repo>
-# 1) 看看有哪些文件会被提交
-git status --short
-
-# 2) 扫一遍真实密钥/QQ号/本机用户名（有命中就人工确认，别把实际值写进仓库）
-$bad = git ls-files | Where-Object { Test-Path $_ } |
-  Select-String -Pattern 'accessToken\s*:\s*[''"]\w{16,}|ownerQQ\s*:\s*[''"]?\d{5,}|SESSDATA\s*[:=]\s*[''"]\w{16,}|C:\\Users\\(?!<)' -List
-if ($bad) { $bad | ForEach-Object { "命中：$($_.Filename):$($_.LineNumber)" } } else { '没有发现个人凭据' }
-
-# 3) 确认忽略规则仍然生效
-git check-ignore -v node_modules lib artifacts 2>$null
-```
-
-### 1.3 发版建议
-
-1. 改 `package.json` 的 `version`（语义化版本，例如 0.8.8 → 0.8.9）；
-2. 在 `CHANGELOG.md` 顶部加一节；
-3. 跑验收（见第 6 节），再 `git tag v<版本> && git push --tags`；
-4. 仓库里**不要**提交 `lib/`——对方 `npm ci && npm run build` 自己生成。
-
----
-
-## 2. 打压缩包：两种形态
-
-### 2.1 给开发者：源码 zip
-
-排除 `node_modules`、`lib`、`artifacts`、`*.tgz`、`.git`、`room`、`.host`，其余全带：
-
-```powershell
-cd <repo>
-$src = 'dsh-world-bili'
-$dst = "dsh-world-bili-src-$(Get-Date -Format yyyyMMdd).zip"
-# 用 git archive 最省事：只会包含已提交的文件（自动排除 .gitignore 里的东西）
-git -C $src archive --format=zip --prefix=dsh-world-bili/ -o "..\$dst" HEAD
-"$dst  $([math]::Round((Get-Item $dst).Length/1MB,2)) MB"
-```
-
-对方解压后：`npm ci --ignore-scripts` → `npm run build` → `npm pack` → 按第 3 节装 tgz。
-
-### 2.2 给普通用户：成品 tgz（推荐）
-
-```powershell
-cd <repo>
-npm ci --ignore-scripts        # 首次需要
-npm run build                  # 生成 lib/
-npm pack                       # 会先跑 prepack（typecheck + build），再按 files 字段打包
-# 产物：dsh-world-bili-<版本>.tgz
-```
-
-`npm pack` 只会带 `files` 字段列出的东西：
-
-```
-lib/            ← 编译后的入口（main: lib/index.js）
-client/         ← 前端（client/index.js）
-tools/          ← B 站 CLI 运行时（必须）
-templates/      ← 世界提示词/记忆模板
-src/ecosystem/wechat/windows/   ← 微信适配器（Python）
-cordis.patch.yml                ← bundle 自带的 insert 行
-README.md INSTALL.md NOTES.md CHANGELOG.md CONTRIBUTING.md
-assets/（如果存在）
-scripts/enable-tool-free-compaction.ps1、repair-profile-patch.mjs、update-world.mjs、
-scripts/import-stickers.mjs、scripts/compact-home.mjs
-```
-
-**不要**手动往 zip 里塞 `node_modules`：对方装的时候由 pnpm/npm 解析 `ws` 等依赖；塞进去反而会因为
-平台/链接布局不同出问题。
-
-### 2.3 手动 zip 成品目录时至少要有什么
-
-如果不用 `npm pack`，自己压目录，最少保留：
-
-```
-package.json  lib/  client/  tools/  templates/  cordis.patch.yml  README.md  INSTALL.md  LICENSE
-```
-
-少了 `lib/` → 对方 import 报 `ERR_MODULE_NOT_FOUND`；少了 `tools/` → B 站 CLI 起不来；
-少了 `templates/` → 世界提示词/记忆模板回落到插件内置（能跑，但少模板）。
-
----
-
-## 3. 对方怎么装（三种来源，同一套注册步骤）
-
-### 3.0 前置检查
-
-| 项 | 要求 | 怎么查 |
-| --- | --- | --- |
-| DSH 版本 | `>=0.2.1-rc.2 <0.3.0-0`（`package.json` 的 `engines.dsh`；0.2.2-rc.1 实测可用） | DSH 设置 → 关于；或看 `~/.dsh/logs/desktop-next.log` 的 `run.start` |
-| Node（仅“自己构建”时需要） | `>=22.16.0` | `node -v` |
-| 磁盘 | 源码+依赖约 300 MB；成品包约 1 MB | — |
-
-### 3.1 推荐：装 `npm pack` 出来的 tgz
+推荐：装 `npm pack` 出来的 tgz
 
 > 为什么不用 `link:` 指向源码目录：源码目录里通常有 `node_modules/@deepseek-ai/*`（构建用的核心包）。
 > 一旦用 `link:` 或直接指向目录，宿主可能优先解析到那套旧核心包，然后把整排核心插件禁用，
 > 启动报 `1 required plugin did not activate`。**分发一律走 tgz。**
 
-1. 对方拿到 `dsh-world-bili-<版本>.tgz`；
+1. 下载 `dsh-world-bili-<版本>.tgz`；
 2. DSH → 设置 → 插件（市场/插件管理）→ 安装本地插件，选这个 tgz（等价于 `pnpm add file:<tgz>`）；
 3. DSH 会往 profile 的 `package.json` 写依赖、往 `dsh.profile.bundles` 加 `dsh-world-bili`；
 4. 重启 DSH。
@@ -223,41 +71,10 @@ npx -y pnpm@11.28.5 install --ignore-scripts
   `dsh-world-bili/compaction`（`replaceCompaction` 默认 true；不想要就按 4.4 关掉）；
 - 建世界目录 `~/.dsh/worlds/<worldId>/`（默认 `default`）。
 
-### 3.4 本地开发（自己改代码时）
-
-分发一律走 tgz；开发时想“改完就生效”，推荐两种方式：
-
-**A. 改前端 / CLI（不用重装）**
-
-`client/index.js` 和 `tools/*.mjs` 不是构建产物。改完后把这两个文件复制进已安装的插件目录
-（默认 `%USERPROFILE%\.dsh\profiles\desktop\node_modules\dsh-world-bili\` 下的 `client/`、`tools/`），
-刷新页面 / 下次跑命令即生效，不用重启。
-
-**B. 改 `src/`（要重新构建，建议走 tgz）**
-
-```powershell
-cd <repo>
-npm run build
-npm pack
-cd "$env:USERPROFILE\.dsh\profiles\desktop"
-npx -y pnpm@11.28.5 add "file:<仓库目录>/dsh-world-bili-<版本>.tgz" --ignore-scripts --config.engine-strict=false
-# 重启 DSH
-```
-
-这样源码目录的 `node_modules` 完全不参与解析，不会把 `@deepseek-ai` 旧核心包装进 profile。
-
-**关于直接 `link:` 源码目录**：只有当源码目录的 `node_modules` 里**没有** `@deepseek-ai/*` 时才是安全的
-（例如只装生产依赖：`npm ci --omit=dev` 只装 `ws`）。否则宿主会优先解析到源码目录里的核心包，
-出现 `1 required plugin did not activate`，排查方法：
-
-```powershell
-# profile 里不应出现核心包副本
-Get-ChildItem "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\@deepseek-ai" -ErrorAction SilentlyContinue
-```
 
 ---
 
-## 4. 对方接到后要配什么
+## 4. 配置
 
 ### 4.1 最小可用配置（`cordis.patch.yml`）
 
@@ -380,19 +197,6 @@ npx -y pnpm@11.28.5 add @snowluma/sdk@2.2.1 --ignore-scripts --config.engine-str
 
 ---
 
-## 5. 对方收到后的验收清单
-
-按顺序打勾，任何一步失败看第 6 节：
-
-1. `include:dsh-world-bili` 在插件列表里、`fiberPhase: active`；
-2. DSH 设置里能打开「世界控制台」（`ui-settings` 没被禁用；禁用时控制台入口也会消失）；
-3. 控制台「概览」显示世界运行中；点「开始」后她有第一句话；
-4. B 站页：`deps` 自检通过、`feed --json` 能出视频；
-5. QQ 页：`online`（SnowLuma 必须在跑，3001 端口通）；
-6. 心情页：数值能读、拖动条能拖、能保存；
-7. `cordis.patch.yml` 里只有一条 `- id: dsh-world-bili`（没有重复的 `- insert:`）。
-
----
 
 ## 6. 故障排查
 
