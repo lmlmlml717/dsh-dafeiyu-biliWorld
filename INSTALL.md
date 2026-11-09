@@ -1,12 +1,13 @@
 # 安装 dsh-world-bili
 
-> 这是**插件**的安装说明。打包、分发、升级、卸载和排障见 [docs-md/DISTRIBUTION.md](docs-md/DISTRIBUTION.md)；配置项总表见 [docs-md/CONFIG-REFERENCE.md](docs-md/CONFIG-REFERENCE.md)。
+> 这是**插件**的安装说明。配置项总表见 [docs-md/PARAMETERS.md](docs-md/PARAMETERS.md)（随包附带）；打包、分发、升级、卸载和排障见仓库里的 [docs-md/DISTRIBUTION.md](https://github.com/lmlmlml717/dsh-dafeiyu-biliWorld/blob/main/docs-md/DISTRIBUTION.md)。
 
 ## 前置
 
 | 要知道的 | 怎么查 |
 | --- | --- |
 | `DSH_HOME` | Windows 默认 `C:\Users\<用户名>\.dsh`；里面应有 `profiles`、`worlds` |
+| DSH 版本 | 插件声明 `dsh >=0.2.1-rc.2 <0.3.0-0`。宿主升到 0.3 后安装会被直接拒绝，要等插件跟着发版；0.2.x 里以 `0.2.2-rc.1` 测试通过 |
 | 用哪个 profile | 列 `<DSH_HOME>/profiles/`，挑 `package.json` 里正在用的那个（通常是 `desktop`） |
 | Node 版本 | `node -v`，需要 ≥ 22.16；也可以用 DSH 自带运行时 |
 | pnpm | 优先用 DSH 自带的 `<DSH 安装目录>/resources/runtime/.../pnpm`；不要依赖全局 pnpm 版本 |
@@ -17,8 +18,10 @@
 
 ```bash
 cd <DSH_HOME>/profiles/<你的 profile>
-node <DSH 自带 pnpm 的入口> add <dsh-world-bili-0.8.10.tgz 的绝对路径> --ignore-scripts
+node <DSH 自带 pnpm 的入口> add <dsh-world-bili-0.9.2.tgz 的绝对路径> --ignore-scripts
 ```
+
+pnpm 会顺带补一套 `@deepseek-ai/dsh-*` 到 `0.2.1-rc.5`，并报 `unmet peer @deepseek-ai/cordis`（装的是 4.1.0，那批包要 `~4.0.5`）。退出码仍是 0，属正常，不要为消警告去删 lock 或降级；细节见 README「装 tgz 时会自动补一套 DSH 内部包」。
 
 然后在 profile 的 `package.json` 里确认：
 
@@ -26,7 +29,7 @@ node <DSH 自带 pnpm 的入口> add <dsh-world-bili-0.8.10.tgz 的绝对路径>
 "dsh": { "profile": { "bundles": ["dsh-world-bili"] } }
 ```
 
-没有就手动加进 `bundles`（数组）。**退出 DSH 再装/改，装完重启 DSH。**
+**必须**手动加进 `bundles`（数组）。漏了这一步包是装上了，但插件不会加载，控制台里什么都看不到。**退出 DSH 再装/改，装完重启 DSH。**
 
 ### 用源码 link（开发）
 

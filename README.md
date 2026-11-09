@@ -2,7 +2,7 @@
 
 > 给 [DSH](https://github.com/deepseek-ai) DeepSeek Harness 的一个「世界 + B 站自动化」
 > 加了评论发布、动态发布、视频转发
-> 当前版本 **0.8.10** · 基于 **dsh-world**，融合 **dsh-feiyu** 的评论链路与 **dsh-bili-whale** 的 B 站工具链/调度设计。
+> 当前版本 **0.9.2** · 基于 **dsh-world**，融合 **dsh-feiyu** 的评论链路与 **dsh-bili-whale** 的 B 站工具链/调度设计。
 ## 太厉害啦DeepSeek大人  与[dsh-world](https://github.com/chenkezhen480/dsh-world)不兼容（大概，我也没试过，这篇md都是DeepSeek大人写的
 ---
 <img width="350" height="350" alt="image" src="https://github.com/user-attachments/assets/767d0883-9993-44d5-ab08-fa2403db3015" />
@@ -72,7 +72,7 @@ cd dsh-dafeiyu-biliWorld
 
 npm ci
 npm run build
-npm pack          # 产出 dsh-world-bili-0.8.10.tgz
+npm pack          # 产出 dsh-world-bili-0.9.2.tgz
 ```
 
 退出 DSH，把 tgz 装进你的 profile：
@@ -95,7 +95,13 @@ node <DSH 自带 pnpm 的入口> add "link:<本仓库绝对路径>" --ignore-scr
 
 > ⚠️ 分发时不要把 `link:` 指向带 `@deepseek-ai` 依赖的源码目录，否则对方会报 `1 required plugin did not activate`。给对方发 tgz。
 
-更细的安装、升级、卸载与排障见 [docs-md/DISTRIBUTION.md](docs-md/DISTRIBUTION.md) 和 [INSTALL.md](INSTALL.md)。
+### 装 tgz 时会自动补一套 DSH 内部包
+
+pnpm 会把 peer 里的 `@deepseek-ai/dsh-*` 一并装进 profile，**装到的是 `0.2.1-rc.5`，不是本文所说的 `0.2.2-rc.1`**：peer 区间是 `>=0.2.1-rc.2 <0.3.0-0`，`0.2.2-rc.1` 属预发布版，semver 不认进这个区间，pnpm 只能取同一档里最高的 `0.2.1-rc.5`（实测 `dsh-tools`、`dsh-session`、`dsh-llm`、`dsh-commands` 这批全是）。宿主内核是 `0.2.1-rc.x` 时两边一致、基本无感；不是的话可能碰到 `1 required plugin did not activate`，装完先翻 DSH 日志有没有这句，有就把 profile 里这批包对齐到宿主版本再重启。
+
+同一批包在 peer 里要 `@deepseek-ai/cordis ~4.0.5`，pnpm 会装成 `4.1.0`，`pnpm peers check` 直接报 unmet。插件自身不直接 import cordis，这条警告不影响安装和运行，**别为了消警告去删 lock 或降级**。
+
+更细的安装、升级、卸载与排障见 [docs-md/DISTRIBUTION.md](https://github.com/lmlmlml717/dsh-dafeiyu-biliWorld/blob/main/docs-md/DISTRIBUTION.md) 和 [INSTALL.md](INSTALL.md)。
 
 ---
 
@@ -136,7 +142,7 @@ node <DSH 自带 pnpm 的入口> add "link:<本仓库绝对路径>" --ignore-scr
       supervise: false
 ```
 
-完整字段见 [docs-md/CONFIG-REFERENCE.md](docs-md/CONFIG-REFERENCE.md)。
+完整字段见 [docs-md/CONFIG-REFERENCE.md](https://github.com/lmlmlml717/dsh-dafeiyu-biliWorld/blob/main/docs-md/CONFIG-REFERENCE.md)。
 
 ### B 站 Cookie
 
@@ -180,7 +186,7 @@ node tools/bili.mjs act dyn --bvid BV1xxxxxxxxx --text "配文" --score 17 --go
 node tools/bili.mjs act dyn --bvid BV1xxxxxxxxx --text "配文" --score 17 --go --also-comment
 ```
 
-命令细节见 `node tools/bili.mjs --help` 和 [docs-md/DISTRIBUTION.md](docs-md/DISTRIBUTION.md)。
+命令细节见 `node tools/bili.mjs --help` 和 [docs-md/DISTRIBUTION.md](https://github.com/lmlmlml717/dsh-dafeiyu-biliWorld/blob/main/docs-md/DISTRIBUTION.md)。
 
 ---
 
