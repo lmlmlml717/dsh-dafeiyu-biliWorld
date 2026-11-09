@@ -10,6 +10,13 @@ export interface HostInstaller {
   writeFileAtomic(file: string, bytes: Uint8Array, options: { mode: number }): Promise<unknown>;
   runProfilePnpm(profile: QqSdkProfile, args: string[], options: Record<string, unknown>): Promise<{ exitCode: number; output: string; timedOut?: boolean; incompatible?: unknown[] }>;
 }
+/**
+ * 向宿主借「按需装依赖」的三件工具：文件锁、原子写、按 profile 跑 pnpm。
+ *
+ * 插件自己不碰用户的包管理器 —— 安装动作必须由宿主的 plugin-manager 执行，权限与回滚都在它手里。
+ * @returns 宿主提供的三个函数；宿主版本太老、缺其中一个时抛中文原因，由调用方显示成「请手动装 SDK」
+ * @throws 宿主没提供完整能力时抛错（不是静默降级：装不上就要让人看见）
+ */
 export async function hostSdkInstaller(): Promise<HostInstaller> {
   const operations = '@deepseek-ai/dsh-plugin-manager/operations', atomic = '@deepseek-ai/dsh-atomic-write';
   const [manager, files] = await Promise.all([import(operations), import(atomic)]);

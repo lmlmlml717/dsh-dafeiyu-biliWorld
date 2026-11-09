@@ -1,6 +1,6 @@
 {
   "name": "dsh-world-bili",
-  "version": "0.8.12",
+  "version": "0.9.2",
   "description": "dsh-world + B站自动化：定时刷视频深读转发到动态 prompt 生成文案（含账本/拟人化/刷视频权重）",
   "license": "MIT",
   "publishConfig": {
@@ -44,6 +44,7 @@
     "INSTALL.md",
     "CONTRIBUTING.md",
     "CHANGELOG.md",
+    "docs-md/PARAMETERS.md",
     "NOTES.md",
     "assets",
     "scripts/enable-tool-free-compaction.ps1",

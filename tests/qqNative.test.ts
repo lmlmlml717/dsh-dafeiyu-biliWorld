@@ -4,7 +4,7 @@
 // 事件直接灌进来，跑的是真的 home.ask 和真的 agent，所以「有没有花掉一轮」是真数出来的。
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SessionId } from '@deepseek-ai/dsh-session';
@@ -43,7 +43,7 @@ function fakeTransport() {
 
 /** 传输层交出来的归一化形状。 */
 const incoming = (over: Partial<{ kind: 'group' | 'private'; groupId: string | null; userId: string; messageId: string; selfId: string; text: string; segments: Array<{ type?: string; data?: Record<string, unknown> }> }> = {}) => ({
-  kind: 'private' as const, groupId: null, userId: '3000000001', messageId: '7999', selfId: '1000000001', text: '在吗',
+  kind: 'private' as const, groupId: null, userId: '10001', messageId: '7999', selfId: '20002', text: '在吗',
   ...over,
 });
 
@@ -51,9 +51,9 @@ const configOf = (over: Partial<QqNativeConfig> = {}): QqNativeConfig => ({
   enabled: true,
   wsUrl: 'ws://127.0.0.1:1',
   accessToken: '',
-  allowPrivate: ['3000000001'],
+  allowPrivate: ['10001'],
   ownerQQ: '',
-  allowGroups: ['700000001'],
+  allowGroups: ['30003'],
   autoReply: true,
   contextMessages: 3,
   // 一条一问：合批有自己的用例。
@@ -148,7 +148,7 @@ test('开着自动回复：花一轮，把这轮的话发回同一个人', async
   await settle(600);
 
   assert.equal(turns, 1);
-  assert.deepEqual(wire.sent, [{ kind: 'private', to: '3000000001', text: '回完了' }]);
+  assert.deepEqual(wire.sent, [{ kind: 'private', to: '10001', text: '回完了' }]);
   assert.equal(channel.status().sent, 1);
   assert.equal(channel.status().failed, 0);
 });
@@ -170,7 +170,7 @@ test('这一轮完成了却没说出一个字：提醒她一次，她说出来�
 
   assert.equal(requests.length, 2);
   assert.match(requests[1]!, /dsh-world-reply-nudge/);
-  assert.deepEqual(wire.sent, [{ kind: 'private', to: '3000000001', text: '刚才走神了，在的' }]);
+  assert.deepEqual(wire.sent, [{ kind: 'private', to: '10001', text: '刚才走神了，在的' }]);
   assert.equal(channel.status().failed, 0);
   assert.ok(infos.some(line => /提醒后说出了/.test(line)), infos.join('\n'));
 });
@@ -203,9 +203,9 @@ test('她把聊天记录原样念了一遍、没说别的：不往群里发，�
   const channel = createQqNativeModule({ ctx, home: async () => agent, config: () => configOf({ groupTrigger: 'all' }), logger: quiet, transport: wire.factory });
   channel.start(); cleanup.push(channel.stop);
 
-  wire.emitGroup(incoming({ kind: 'group', groupId: '700000001', messageId: '1', text: '第一句' }));
+  wire.emitGroup(incoming({ kind: 'group', groupId: '30003', messageId: '1', text: '第一句' }));
   await settle(800);
-  wire.emitGroup(incoming({ kind: 'group', groupId: '700000001', messageId: '2', text: '第二句' }));
+  wire.emitGroup(incoming({ kind: 'group', groupId: '30003', messageId: '2', text: '第二句' }));
   await settle(800);
 
   assert.deepEqual(wire.sent, []);
@@ -241,7 +241,7 @@ test('三条不该问的：重复的 id、不在白名单的、她自己发的',
 
   wire.emit(incoming({ messageId: '8001' }));                       // 同一条消息的重投
   wire.emit(incoming({ messageId: '8002', userId: '999999' }));     // 不在白名单
-  wire.emit(incoming({ messageId: '8003', userId: '1000000001' })); // 她自己发的（回声）
+  wire.emit(incoming({ messageId: '8003', userId: '20002' })); // 她自己发的（回声）
   wire.emit(incoming({ messageId: '' }));                           // 协议里没给 id：不拦，但也别当重复
   await settle(600);
   assert.equal(turns, 2, '只有「没 id 的那条」该再多一次；重复/白名单外/自己的都不算');
@@ -257,13 +257,13 @@ test('群里说话也走同一条线，回包发回群里', async t => {
 
   // 现在群里默认只接被叫到的：给个 @ 段，这条测的是「回包发回群里」而不是闸门。
   wire.emitGroup(incoming({
-    kind: 'group', groupId: '700000001', userId: '3000000002', messageId: '9001', text: '@1000000001 大家好',
-    segments: [{ type: 'at', data: { qq: '1000000001' } }, { type: 'text', data: { text: ' 大家好' } }],
+    kind: 'group', groupId: '30003', userId: '40004', messageId: '9001', text: '@20002 大家好',
+    segments: [{ type: 'at', data: { qq: '20002' } }, { type: 'text', data: { text: ' 大家好' } }],
   }));
   await settle(600);
 
   assert.equal(turns, 1);
-  assert.deepEqual(wire.sent, [{ kind: 'group', to: '700000001', text: '群里回一句' }]);
+  assert.deepEqual(wire.sent, [{ kind: 'group', to: '30003', text: '群里回一句' }]);
 });
 
 
@@ -276,7 +276,7 @@ test('群里没叫她就不接：只记上下文，不花一轮', async t => {
   channel.start(); cleanup.push(channel.stop);
 
   // 一句普通群聊：没 @、没引用、没关键词
-  wire.emitGroup(incoming({ kind: 'group', groupId: '700000001', userId: '3000000002', messageId: '9101', text: '中午吃什么' }));
+  wire.emitGroup(incoming({ kind: 'group', groupId: '30003', userId: '40004', messageId: '9101', text: '中午吃什么' }));
   await settle(600);
 
   assert.equal(turns, 0, '没叫到她的群消息不该花一轮');
@@ -294,8 +294,8 @@ test('群里被 @ 到、或者有人引用她刚说的话，才递给她', async
 
   // 被 @：at 段指着她自己的号
   wire.emitGroup(incoming({
-    kind: 'group', groupId: '700000001', userId: '3000000002', messageId: '9201', text: '@1000000001 在吗',
-    segments: [{ type: 'at', data: { qq: '1000000001' } }, { type: 'text', data: { text: ' 在吗' } }],
+    kind: 'group', groupId: '30003', userId: '40004', messageId: '9201', text: '@20002 在吗',
+    segments: [{ type: 'at', data: { qq: '20002' } }, { type: 'text', data: { text: ' 在吗' } }],
   }));
   await settle(600);
   assert.equal(turns, 1, '@ 到她就该接');
@@ -303,7 +303,7 @@ test('群里被 @ 到、或者有人引用她刚说的话，才递给她', async
 
   // 引用她刚回的那句：她发出去的消息 id 是 g1（假传输层固定返回的）
   wire.emitGroup(incoming({
-    kind: 'group', groupId: '700000001', userId: '3000000002', messageId: '9202', text: '[引用消息] 这句什么意思',
+    kind: 'group', groupId: '30003', userId: '40004', messageId: '9202', text: '[引用消息] 这句什么意思',
     segments: [{ type: 'reply', data: { id: 'g1' } }, { type: 'text', data: { text: ' 这句什么意思' } }],
   }));
   await settle(600);
@@ -318,7 +318,7 @@ test('命中关键词也算在叫她；私聊不受这个闸门管', async t => 
   const channel = createQqNativeModule({ ctx, home: async () => agent, config: () => configOf({ groupKeywords: ['大肥鱼'] }), logger: quiet, transport: wire.factory });
   channel.start(); cleanup.push(channel.stop);
 
-  wire.emitGroup(incoming({ kind: 'group', groupId: '700000001', userId: '3000000002', messageId: '9301', text: '大肥鱼呢' }));
+  wire.emitGroup(incoming({ kind: 'group', groupId: '30003', userId: '40004', messageId: '9301', text: '大肥鱼呢' }));
   await settle(600);
   assert.equal(turns, 1, '关键词命中就该接');
 
@@ -336,7 +336,7 @@ test('groupTrigger 拨成 all：群里每句都接（逃生口）', async t => {
   const channel = createQqNativeModule({ ctx, home: async () => agent, config: () => configOf({ groupTrigger: 'all' }), logger: quiet, transport: wire.factory });
   channel.start(); cleanup.push(channel.stop);
 
-  wire.emitGroup(incoming({ kind: 'group', groupId: '700000001', userId: '3000000002', messageId: '9401', text: '随便说一句' }));
+  wire.emitGroup(incoming({ kind: 'group', groupId: '30003', userId: '40004', messageId: '9401', text: '随便说一句' }));
   await settle(600);
   assert.equal(turns, 1, 'all 就是老的「句句都接」');
 });
@@ -373,7 +373,7 @@ test('她回过的话记成她自己说的：下一轮的上下文里那几句�
   const channel = createQqNativeModule({ ctx, home: async () => agent, config: () => configOf(), logger: quiet, transport: wire.factory });
   channel.start(); cleanup.push(channel.stop);
 
-  const at = { kind: 'group' as const, groupId: '700000001', segments: [{ type: 'at', data: { qq: '1000000001' } }] };
+  const at = { kind: 'group' as const, groupId: '30003', segments: [{ type: 'at', data: { qq: '20002' } }] };
   wire.emitGroup(incoming({ ...at, messageId: '8101', text: '@大肥鱼 在吗' }));
   await settle(600);
   assert.equal(wire.sent.length, 1, '叫到她了，她回了一句');
@@ -568,3 +568,52 @@ test('面板改的合批窗口存下来，重载后还在；没改过的就是�
   assert.equal(make().status().batchQuietMs, 0);
   assert.equal(JSON.parse(readFileSync(stateFile, 'utf8')).batchQuietMs, 0);
 });
+
+/** 她的「想给你看这条」队列：一行一条，跟 `bili.mjs share` 写出来的形状一致。 */
+function shareQueue(t: { after(fn: () => void): void }, records: Array<Record<string, unknown>>) {
+  const dir = mkdtempSync(join(tmpdir(), 'qq-share-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, 'owner-outbox.jsonl');
+  for (const record of records) writeFileSync(file, JSON.stringify({ at: new Date().toISOString(), ...record }) + '\n', { flag: 'a' });
+  return file;
+}
+
+test('她说「想给你看这条」：队列里那条私聊发给主人，标题和 BV 一起到（0.8.25）', async t => {
+  const { ctx, cleanup } = await hostFixture(t, () => textResponse('嗯'));
+  const agent = (await ctx.agents.create({ sessionId: SessionId('home-share'), agentOptions: { provider: 'test', model: 'test' } })).agent;
+  const file = shareQueue(t, [{ id: 's1', bvid: 'BV1xx411c7mD', title: '烤鸡', say: '笑到呛住' }]);
+  const wire = fakeTransport();
+  const channel = createQqNativeModule({
+    ctx, home: async () => agent, config: () => configOf({ ownerQQ: '10001' }), logger: quiet, transport: wire.factory, shareOutbox: file,
+  });
+  channel.start(); cleanup.push(channel.stop);
+  // 分享只在通道 online 时才发（离线只等着，不消耗重试），所以这里要等过一轮 3 秒的轮询。
+  await settle(3_500);
+
+  // 只给 BV：主人要的是能自己贴进 B站 的号，不是一条长链接。
+  assert.deepEqual(wire.sent, [{ kind: 'private', to: '10001', text: '《烤鸡》\nBV1xx411c7mD\n笑到呛住' }]);
+  // 记账写下来了：下一轮（或重启后）不会把同一条再发一遍。
+  assert.deepEqual(JSON.parse(readFileSync(`${file}.sent.json`, 'utf8')).ids, ['s1']);
+});
+
+test('静默期间不递分享：等着，静默一过照样送到（静默是「别吵他」，不是「别分享」）', async t => {
+  const { ctx, cleanup } = await hostFixture(t, () => textResponse('嗯'));
+  const agent = (await ctx.agents.create({ sessionId: SessionId('home-share-muted'), agentOptions: { provider: 'test', model: 'test' } })).agent;
+  const file = shareQueue(t, [{ id: 's2', bvid: 'BV1xx411c7mD', title: '烤鸡' }]);
+  const wire = fakeTransport();
+  let muted = new Date(Date.now() + 3_600_000).toISOString();
+  const channel = createQqNativeModule({
+    ctx, home: async () => agent,
+    config: () => configOf({ ownerQQ: '10001', mutedUntil: muted }),
+    logger: quiet, transport: wire.factory, shareOutbox: file,
+  });
+  channel.start(); cleanup.push(channel.stop);
+  await settle(800);
+  assert.deepEqual(wire.sent, [], '静默中不该发出去');
+
+  // 静默结束：这条不该被丢，也不该因为「等了几轮」而被记成失败。轮询是 3 秒一次，多等一轮。
+  muted = '';
+  await settle(3_500);
+  assert.deepEqual(wire.sent, [{ kind: 'private', to: '10001', text: '《烤鸡》\nBV1xx411c7mD' }]);
+});
+

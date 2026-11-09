@@ -1,3 +1,12 @@
+/**
+ * DeepSeek 的按 token 计价：区分模型、缓存命中与峰谷时段，算一步花了多少人民币。
+ *
+ * 导出：isPeak、stepCost。
+ * 调用方：life/runtime.ts 在 assistant/message 事件里累计当天花费。
+ * 依赖：@deepseek-ai/dsh-llm 的 TokenUsage；价格与节假日表是照官方页面抄的常量。
+ * 坑：模型名按子串匹配，没认出来的一律按 Flash 计价（宁可少报也不虚报）；
+ * 节假日表只抄到 2026 年，跨年要补，否则元旦会被当成工作日。
+ */
 // DeepSeek prices and peak hours follow dsh-whale-widget (MIT, Copyright (c) 2026 MeteorNOX),
 // https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget, which tracks the official page
 // https://api-docs.deepseek.com/zh-cn/quick_start/pricing.
@@ -22,7 +31,9 @@ const HOLIDAYS = new Set([
   '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04', '2026-10-05', '2026-10-06', '2026-10-07',
 ]);
 
+/** 北京时间的工作日 9:00–12:00、14:00–18:00 算高峰；周末和法定节假日全天低谷。 */
 export function isPeak(at: Date): boolean {
+  // 先整体平移到 UTC+8，再统一用 getUTC* 读，避开运行机器的本地时区。
   const beijing = new Date(at.getTime() + 8 * 3_600_000);
   const day = beijing.getUTCDay();
   if (day === 0 || day === 6 || HOLIDAYS.has(beijing.toISOString().slice(0, 10))) return false;
@@ -31,6 +42,7 @@ export function isPeak(at: Date): boolean {
 }
 /** What one model step cost in CNY. DeepSeek reports cache hits apart from the other input; reasoning is part of the output. */
 export function stepCost(usage: TokenUsage, model: string, at: Date): number {
+  // 按子串匹配模型名；顺序有讲究，v4-pro 要排在 flash 前面。
   const price = PRICES.find(([id]) => model.toLowerCase().includes(id))?.[1] ?? FLASH;
   const peak = isPeak(at) ? 1 : 0;
   return ((usage.cacheReadTokens ?? 0) * price.hit[peak] + usage.inputTokens * price.miss[peak] + usage.outputTokens * price.out[peak]) / 1e6;

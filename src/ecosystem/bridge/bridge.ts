@@ -1,3 +1,12 @@
+/**
+ * 本地桥：让同一台机器上的其他程序把话递进她的家，并把她的回复推回出口。
+ *
+ * 导出：REPLY_TIMEOUT_MS、HomeUnavailable、BridgeDeps、createBridge、Bridge 类型。
+ * 调用方：插件的 bridge 路由（/dsh-world/bridge/say）和控制台；bridge.json 供外部程序发现。
+ * 依赖：lifeStore.durableWrite、faults、outlets、worldScope、dsh-llm。
+ * 坑：口令是进程内随机生成、只写进 bridge.json，重载即换；只跟踪最后一句话，
+ * 前一句还没回又来一句时，前一句的回复不再推送（避免答错人），超时会推一句「在忙」。
+ */
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync, rmSync } from 'node:fs';
 import type { Context } from '@deepseek-ai/cordis';
@@ -10,9 +19,11 @@ import { realTimers, type LifeTimers } from '../../life/alarmTimer.ts';
 import { busyText, pushOf, type Outlet, type Push, type PushKind } from '../shared/outlets.ts';
 import { admit, type InWorld } from '../../worldScope.ts';
 
+/** 超过三分钟还没等到回复，就替她推一句「在忙」；回复真到了仍会继续推。 */
 export const REPLY_TIMEOUT_MS = 3 * 60_000;
 /** The words could not be handed to her home; the route answers 503. */
 export class HomeUnavailable extends Error {}
+/** createBridge 的依赖：家、出口、bridge.json 的位置，以及可替换的时钟和定时器。 */
 export interface BridgeDeps {
   ctx: Context;
   /** The current home, resolving or rebuilding it (the life line's own). */
@@ -42,6 +53,7 @@ export function createBridge(deps: BridgeDeps) {
   const timers = deps.timers ?? realTimers;
   const faults = new Faults();
   const disposers: (() => void)[] = [];
+  // 每次启动换一把新口令：写文件是为了让外部程序读到，不是为了跨重启保持。
   const token = randomBytes(32).toString('hex');
   let tracked: Tracked | undefined;
   let stopped = false;
@@ -71,6 +83,7 @@ export function createBridge(deps: BridgeDeps) {
   function start(): void {
     disposers.push(ctx.on('session/event', (session, event) => {
       if (!tracked || session.id !== tracked.sessionId) return;
+      // 只有她真正收下这句话（日志里出现这条 user/message）之后，她说的话才算回复。
       if (event.type === 'user/message' && event.data.id === tracked.id) { tracked.admitted = true; return; }
       if (event.type !== 'assistant/message' || !tracked.admitted) return;
       const visible = event.data.message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n');
@@ -95,6 +108,7 @@ export function createBridge(deps: BridgeDeps) {
   }
   function checkToken(value: string | undefined): boolean {
     if (typeof value !== 'string') return false;
+    // 定长比较，别让耗时泄漏出口令对了多少位。
     const given = Buffer.from(value); const expected = Buffer.from(token);
     return given.length === expected.length && timingSafeEqual(given, expected);
   }
@@ -121,4 +135,5 @@ export function createBridge(deps: BridgeDeps) {
   }
   return { start, stop, say, checkToken, faults: () => faults.list() };
 }
+/** createBridge 的返回类型。 */
 export type Bridge = ReturnType<typeof createBridge>;

@@ -9,24 +9,52 @@
 //   说话 —— 评论 / 分享评论 / 回评 / 弹幕 / 动态 / 图片评论（带正文、视频标题、回给谁）
 //   动作 —— 点赞 / 投币 / 关注 / 投稿（谁、哪条视频）
 // 并且每条都标出**是不是 @ 主人**：主人最想知道的就是"没 @ 我的那部分"。
+//
+// 【模块卡片】
+// 职责：她的 B站 行为流水（只追加的 JSONL）—— 记录、筛选、按天统计、生成摘要与 Markdown。
+// 导出：LOG_FILE / KIND_LABEL / mentionsOwner / append / read / stats / countLine /
+//       digestText / markdown / writeMarkdown / backfillFromOutbox。
+// 调用方：lib/bili-write.mjs、lib/outbox.mjs 动态 import 写入；宿主 src/bili/history.ts 直接读 JSONL。
+// 数据文件：<bili 根>/bili-social.jsonl（只追加）；bili-social-<day>.md（writeMarkdown 落盘）。
+// 坑：append 失败必须吞掉返回 null —— 记账不能影响她社交；read 对坏行逐行跳过，
+//     一条损坏的 JSON 不能让整天的流水都读不出来。
+// 【链路位置】
+//   环节：行为流水旁路 —— bili-write 写成功后经 outbox 或直接 append，把「她今天在 B站 干了什么」记成 JSONL；不参与发送判定。
+//   上游调用：lib/bili-write.mjs 的 capRecord（动态/评论）、lib/outbox.mjs 的 recordBili（评论/回评/弹幕）；宿主 src/bili/history.ts 直接读 JSONL。
+//   下游调用：lib/paths.mjs（LOG_FILE）；不联网。
+//   读写文件：<bili 根>/bili-social.jsonl（只追加）；writeMarkdown 另落 bili-social-<day>.md。
+//   退出码：库不设退出码；append 失败返回 null 并吞掉，read 对坏行逐行跳过。
+//   上游参考：字段与「@主人」判定沿用仓库原有的社交流水口径；backfillFromOutbox 负责把旧的 bili-outbox.md 补录进来。
 import fs from 'node:fs'
 import { dataPath } from './paths.mjs'
 
+/**
+ * 流水文件路径（用函数而不是常量：测试会中途改 WORLD_BILI_DATA_DIR）。
+ * @returns {string}
+ */
 export const LOG_FILE = () => dataPath('bili-social.jsonl')
 
+/**
+ * kind → 中文标签，写进每条记录的 label 字段，面板、摘要和 Markdown 都按它显示。
+ * @type {Object<string, string>}
+ */
 export const KIND_LABEL = {
   comment: '评论',
   share: '分享评论',
   reply: '回评',
   danmaku: '弹幕',
   dynamic: '动态',
+  // 0.9.0：动态两种分开记（以前转发/纯动态都被记成 comment）。
+  dyn_share: '转发动态',
+  dyn_pure: '纯动态',
   imgComment: '图片评论',
   like: '点赞',
   coin: '投币',
   follow: '关注',
   video: '投稿',
 }
-const SPEAK_KINDS = new Set(['comment', 'share', 'reply', 'danmaku', 'dynamic', 'imgComment'])
+// 0.9.0：转发/纯动态是她公开发的话，和「动态」一样算 speak；以前它们带着未知 kind 进来，speak=false。
+const SPEAK_KINDS = new Set(['comment', 'share', 'reply', 'danmaku', 'dynamic', 'dyn_share', 'dyn_pure', 'imgComment'])
 
 /** 这条是不是 @ 了主人？（主人在 B站 可能被叫"主人"，也可能被他自己的昵称 @） */
 export function mentionsOwner(rec = {}, cfg = {}) {
@@ -34,6 +62,7 @@ export function mentionsOwner(rec = {}, cfg = {}) {
   if (/主人/.test(to)) return true                       // 回给主人的（to 里写着主人）
   const s = `${rec.text || ''} ${rec.extra || ''}`
   if (/(@|＠)\s*主人/.test(s)) return true
+  // 昵称可能没配，先判空再匹配：否则空串会让所有 @ 都被当成 @ 主人。
   const nick = String(cfg.owner?.biliName || cfg.owner?.nickname || '').trim()
   if (nick && (s.includes('@' + nick) || s.includes('＠' + nick))) return true
   return false
@@ -43,6 +72,10 @@ export function mentionsOwner(rec = {}, cfg = {}) {
  * 记一条。
  * @param {object} o {kind, bvid, title, to, text, extra, url, meta}
  */
+// 【补充】调用方：lib/outbox.mjs 的 recordBili、lib/bili-write.mjs 的 capRecord（动态/评论）；测试也直接追加。
+//   参数：{ kind, bvid, title, to, text, extra, url, meta, cfg }；cfg 只用于判断是否 @ 主人。
+//   返回：落盘的那条记录（含 ts/day/label/speak/toOwner）；写失败返回 null。
+//   失败：全程 try/catch，绝不抛 —— 她正在社交，不能因为记账失败回滚已经发生的事。
 export function append(o = {}) {
   try {
     const now = new Date()
@@ -66,10 +99,15 @@ export function append(o = {}) {
     fs.appendFileSync(f, JSON.stringify(rec) + '\n')
     return rec
   } catch {
+    // 写流水失败不抛：她正在社交，不能因为记账失败回滚已经发生的事。
     return null // 记录失败绝不影响她社交本身
   }
 }
 
+// 【补充】调用方：宿主 src/bili/history.ts（面板历史）、digestText/markdown、backfillFromOutbox 的幂等检查。
+//   参数：days 往回几天（0 = 全部，配合 since 用）；kind 按 kind 或 label 过滤；onlySpeak 只看说话类；excludeOwner 去掉 @ 主人的。
+//   返回：记录数组（文件不存在返回空数组）。
+//   失败：坏行逐行跳过；ts 无法解析时按「不小于起点」保留，宁可多看一眼也不悄悄丢历史。
 /** 读流水：{days|since, kind, onlySpeak, excludeOwner} */
 export function read({ days = 1, since = 0, kind = '', onlySpeak = false, excludeOwner = false, cfg = {} } = {}) {
   const from = since || (days > 0 ? Date.now() - days * 86400_000 : 0)
@@ -80,10 +118,12 @@ export function read({ days = 1, since = 0, kind = '', onlySpeak = false, exclud
     if (!line.trim()) continue
     try {
       const r = JSON.parse(line)
+      // 时间无法解析时比较结果为 false，记录会被保留 —— 宁可多看一眼，也别悄悄丢历史。
       if (Number(new Date(r.ts).getTime()) < from) continue
       if (kind && r.kind !== kind && r.label !== kind) continue
       if (onlySpeak && !r.speak) continue
       if (excludeOwner && r.toOwner) continue
+      // 老记录没有 toOwner 字段，读取时用当前配置补算，避免历史消息全被当成「没 @」。
       if (r.toOwner === undefined) r.toOwner = mentionsOwner(r, cfg)
       out.push(r)
     } catch {}
@@ -91,6 +131,9 @@ export function read({ days = 1, since = 0, kind = '', onlySpeak = false, exclud
   return out
 }
 
+// 【补充】调用方：digestText / markdown 先调它拿逐日汇总；面板摘要也用它。
+//   参数：recs 是 read() 的结果。返回：按天倒序的数组，每项 { day, total, kinds, toOwner, seenByOwner }。
+//   失败：不抛错；空数组返回空结果。
 /** 按天 × 类型的计数（给摘要用）。 */
 export function stats(recs = []) {
   const byDay = new Map()
@@ -115,6 +158,9 @@ export function countLine(d) {
  * @param {Array} recs
  * @param {{title?:string, limit?:number}} o
  */
+// 【补充】调用方：宿主推给主人的摘要（src/bili/history.ts 或通知链路）；错误不抛，返回空串表示没内容可报。
+//   参数：recs 是 read() 的结果；o.limit 控制「没 @ 你」的条数（默认 12）。返回：多行文本。
+//   失败：不抛错；没有记录时返回空串。
 export function digestText(recs = [], o = {}) {
   const limit = o.limit ?? 12
   const days = stats(recs)
@@ -135,10 +181,13 @@ export function digestText(recs = [], o = {}) {
   return lines.join('\n')
 }
 
+// 【补充】调用方：writeMarkdown 落盘、面板/人工导出；标题固定「B站社交流水」（0.9.0 起不再写死角色名）。
+//   参数：recs 是 read() 的结果；o.title 附加在标题后。返回：完整 Markdown 字符串。
+//   失败：不抛错；没有记录时返回一句「这段时间她没在 B站 动过」。
 /** 完整 Markdown（存文件 / 面板看）。 */
 export function markdown(recs = [], o = {}) {
   const days = stats(recs)
-  const head = [`# 大肥鱼 · B站社交流水 ${o.title || ''}`.trim(), '']
+  const head = [`# B站社交流水 ${o.title || ''}`.trim(), '']
   if (!days.length) return head.concat(['（这段时间她没在 B站 动过）']).join('\n')
   head.push(`共 ${recs.length} 条 · ${days.length} 天 · 没 @ 主人的 ${recs.filter((r) => !r.toOwner).length} 条`)
   head.push('')
@@ -174,6 +223,9 @@ export function writeMarkdown(recs = [], day = new Date().toLocaleDateString('sv
  * 行格式：`- 20:29 **分享评论** [《标题》](链接)：正文` / `- 20:17 **回评** […] →回应「人：…」：正文`
  * 幂等：同一天同一时刻同一段正文已在流水里就跳过。
  */
+// 【补充】调用方：人工迁移或控制台首次打开时手动调一次；不是定时任务。
+//   参数：file 默认 <数据根>/bili-outbox.md。返回：本次补录的条数（0 = 没有新内容或文件不存在）。
+//   失败：读文件失败返回 0；坏行跳过；追加写失败会抛（补录是一次性动作，失败要让人看见）。
 export function backfillFromOutbox(file = dataPath('bili-outbox.md')) {
   const KIND_MAP = { 评论: 'comment', 分享评论: 'share', 回评: 'reply', 弹幕: 'danmaku', 动态: 'dynamic', 图片评论: 'imgComment' }
   let raw = ''
@@ -197,7 +249,9 @@ export function backfillFromOutbox(file = dataPath('bili-outbox.md')) {
     const idx = rest.lastIndexOf('：')
     const text = idx >= 0 ? rest.slice(idx + 1).trim() : rest.trim()
     if (!text) continue
+    // 台账里只有本地 HH:MM，这里直接按 UTC 拼 'Z'：沿用旧口径只为让幂等键对得上，别拿它做时区换算。
     const ts = `${day}T${time}:00.000Z`
+    // 幂等键 = 分钟 + 正文前 60 字：同一分钟发两条不同内容仍能区分，重复导入则跳过。
     const key = `${ts.slice(0, 16)}|${text.slice(0, 60)}`
     if (have.has(key)) continue
     have.add(key)

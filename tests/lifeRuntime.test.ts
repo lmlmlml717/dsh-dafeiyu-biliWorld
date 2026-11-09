@@ -214,6 +214,17 @@ test('the turn the question started never asks again, even with a new alarm, so 
   assert.equal(s.requests.length, 4);
   assert.deepEqual(s.alarm(), { at: '2026-10-23T04:00:00.000Z', source: 'plan' });
 });
+test('a turn the plugin woke her for is not her stopping early', async t => {
+  const s = await setup(t, () => textResponse('嗯'));
+  await s.start();
+  s.life.planNext({ after_minutes: 60 }, '看书');
+  const home = s.ctx.agents.get(SessionId(s.life.snapshot().homeSessionId!))!;
+  home.followup(createUserMessage({ source: { kind: 'dsh-world-life', lifeKind: 'bili-wake' }, content: [{ type: 'text', text: 'B 站到点了' }] }));
+  await s.idle();
+  assert.equal(s.requests.length, 2, '插件叫醒的那一轮结束不算提前收工');
+  assert.equal(s.store.read().alarm?.nudged, undefined, '所以之后真正的提前收工还能问');
+});
+
 test('no question when her alarm is close, after her partner spoke, or when the turn was stopped', async t => {
   const close = await setup(t, (_request, index) => index === 0 ? toolCall('plan_next', { after_minutes: 5, note: '收尾' }) : textResponse('嗯'), { before: existingHome('起来') });
   await createAgent(close.ctx, 'home-0');

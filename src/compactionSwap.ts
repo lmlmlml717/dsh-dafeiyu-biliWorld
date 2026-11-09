@@ -1,7 +1,16 @@
+// 把 profile 的压缩换成“只留对话”版本；也负责把旧包名 dsh-world/compaction 迁移到 dsh-world-bili/compaction。
+//
+// 导出：CompactionSwap / CompactionSwapOptions 类型，migrateLegacyCompaction、swapStockCompaction、
+//       swapPresetConfig、swapPresetCompaction、swapCompactionOnce，以及 ConfigEditor 接口。
+// 被谁调用：index.ts 启动时调 swapCompactionOnce；控制台/命令行脚本可单独调前几个函数。
+// 依赖：node:fs、./install/profileFile.ts 的备份与原子写；不改 profile 的其它行。
+// 坑：旧包名是坏行，看到就必须迁移，与“要不要换压缩”无关；原版压缩行找不到或多于一条时什么都不动；
+//     Web 宿主把压缩放在预设里，整份预设写回后不再跟随 DSH 升级。
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { backupBeside, replaceAtomically } from './install/profileFile.ts';
 
+/** 换压缩的结果：swapped 带备份路径，already 表示已经是我们的，unchanged 带不改的理由。 */
 export type CompactionSwap =
   | { status: 'swapped'; backup: string; preset?: string; migrated?: boolean }
   | { status: 'already' }
@@ -25,6 +34,7 @@ const OURS = 'dsh-world-bili/compaction';
 const LEGACY = 'dsh-world/compaction';
 
 /** 只匹配「整行就是一个 name:」的写法，引号可有可无，行尾注释与 CRLF 原样保留。 */
+// 只匹配整行 name:，行尾注释和 CRLF 保留；引号捕获后原样写回。
 function nameRow(specifier: string): RegExp {
   const escaped = specifier.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp(`^(\\s*name:\\s*)(['"]?)${escaped}\\2([ \\t]*(?:#.*)?\\r?)$`, 'gm');
@@ -34,11 +44,13 @@ const rowsOf = (text: string, specifier: string): RegExpMatchArray[] => [...text
 
 /** 迁移旧包名时保留原来的引号风格，尽量少动用户的文件。 */
 function renameKeepingQuote(text: string, from: string, to: string): string {
+  // 保留原来的引号风格：用户写单引号就还是单引号。
   return text.replace(nameRow(from), (_match: string, lead: string, quote: string, tail: string) => `${lead}${quote}${to}${quote}${tail}`);
 }
 
 /** 把 profile 里所有旧包名的行改成新包名；返回是否改过。 */
 function migrateRows(file: string, text: string): string | undefined {
+  // 旧包名是坏行：先迁移再判断“已经换过”；迁移成功直接返回，避免同一次调用又改一遍。
   if (rowsOf(text, LEGACY).length === 0) return undefined;
   const backup = backupBeside(file);
   const migrated = renameKeepingQuote(text, LEGACY, OURS);
@@ -81,6 +93,7 @@ export function swapStockCompaction(profileDir: string): CompactionSwap {
 interface Row { name?: unknown; group?: unknown; config?: unknown }
 /** The compaction rows in a preset's plugin list, including those nested in groups (where DSH's Web host isolates it). */
 function compactionRows(rows: unknown, found: Row[] = []): Row[] {
+  // 预设可能把压缩放在 group 里（Web 宿主隔离预设），所以要递归 config。
   if (!Array.isArray(rows)) return found;
   for (const row of rows as Row[]) {
     if (row?.name === STOCK || row?.name === OURS || row?.name === LEGACY) found.push(row);
@@ -100,13 +113,16 @@ function compactionRows(rows: unknown, found: Row[] = []): Row[] {
  * 不传（或空数组）＝不写这个键，压缩引擎退回「所有会话都剔除」的旧行为。
  */
 export function swapPresetConfig(config: unknown, options: CompactionSwapOptions = {}): { status: 'swapped'; config: unknown; migrated?: boolean } | Exclude<CompactionSwap, { status: 'swapped' }> {
+  // structuredClone 后再改：输入不被修改，调用方可以比较前后。
   const next = structuredClone(config) as { plugins?: unknown };
   const rows = compactionRows(next?.plugins);
+  // 已经是我们的就不动，避免覆盖用户后来加的 config。
   if (rows.some(row => row.name === OURS)) return { status: 'already' };
   if (rows.length === 1) {
     const row = rows[0]!;
     const migrated = row.name === LEGACY;
     row.name = OURS;
+    // 只写非空数组；空数组保持旧行为（所有会话都剔除工具）。
     if (options.toolFreeFor !== undefined && options.toolFreeFor.length > 0) {
       const current = row.config;
       const base = typeof current === 'object' && current !== null && !Array.isArray(current) ? current as Record<string, unknown> : {};
@@ -130,11 +146,14 @@ interface ConfigEntry { options: { id?: string; name?: string; config?: unknown 
  */
 export async function swapPresetCompaction(editor: ConfigEditor, presetId: string, profileDir: string, options: CompactionSwapOptions = {}): Promise<CompactionSwap> {
   const entry = editor.entries().find(row => row.options.name === '@deepseek-ai/dsh-agent-preset' && (row.options.config as { id?: unknown } | undefined)?.id === presetId);
+  // 找不到预设就原样返回，不猜别的预设。
   if (!entry) return { status: 'unchanged', reason: `没有找到预设 ${presetId}` };
   const first = swapPresetConfig(entry.options.config, options);
   if (first.status !== 'swapped') return first;
   const file = join(profileDir, 'cordis.patch.yml');
+  // 先备份：editor.edit 会整份写回 profile，失败时至少还有原文件。
   const backup = existsSync(file) ? backupBeside(file) : undefined;
+  // 写入前再算一次：预设可能被别的页面改过，状态变了就抛错放弃。
   await editor.edit(entry, raw => {
     const result = swapPresetConfig(raw, options);
     if (result.status !== 'swapped') throw new Error(`预设 ${presetId} 在写入前变了：${result.status === 'unchanged' ? result.reason : '已经换过'}`);
@@ -150,6 +169,7 @@ export async function swapPresetCompaction(editor: ConfigEditor, presetId: strin
  * 交换本身仍按 `replaceCompaction` 与“每个世界只试一次”的约定走，成功或本来就是我们的才记住。
  */
 export async function swapCompactionOnce(deps: { enabled: boolean; profileDir: string | undefined; done(): boolean; markDone(): void; report(message: string): void; swap?: (profileDir: string) => CompactionSwap | Promise<CompactionSwap> }): Promise<void> {
+  // 没配 profile 目录（比如 TUI）就什么都不做。
   if (!deps.profileDir) return;
   if (!deps.enabled || deps.done()) {
     // 不换压缩时也可能要修旧包名：那是坏的，和“换不换”无关。失败不阻断启动，下次还会看到。
@@ -158,9 +178,12 @@ export async function swapCompactionOnce(deps: { enabled: boolean; profileDir: s
   }
   const swap = deps.swap ?? swapStockCompaction;
   let result: CompactionSwap;
+  // 换失败只报告不阻断启动；下一次启动还会再试。
   try { result = await swap(deps.profileDir); }
   catch (error) { deps.report(`没能把压缩换成 dsh-world 的“只留对话”压缩：${error instanceof Error ? error.message : String(error)}`); return; }
+  // 没换成也要说明后果：自动压缩仍归预设，75% 触发线不生效。
   if (result.status === 'unchanged') { deps.report(`没有换成 dsh-world 的“只留对话”压缩（${result.reason}）：自动压缩仍由预设自带的压缩负责，dsh-world 的 75% 触发线不生效；控制台的“应用并压缩”和回顾后压缩照常可用。`); return; }
+  // 成功或本来就是我们的才记住，失败下次还会再试。
   deps.markDone();
   if (result.status !== 'swapped') return;
   const migrated = result.migrated ? '（顺带把旧包名 dsh-world/compaction 改成 dsh-world-bili/compaction：旧名解析不到包，会让会话起不来）' : '';

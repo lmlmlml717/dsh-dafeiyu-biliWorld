@@ -1,3 +1,11 @@
+// cordis.patch.yml 的语义层：只判断、只追加、只修本插件的旧写法，从不“解析 → 改 → 序列化”。
+//
+// 导出：OverlayEdit 类型、hasRow / appendVerdict / appendBlock / insertBlock、
+//       repairLegacyInsertText / repairLegacyInsert、removeOwnInsertText / removeOwnInsert。
+// 被谁调用：install/selfRegister.ts（自注册与启动修复）与 scripts/repair-profile-patch.mjs。
+// 依赖：./profileFile.ts（备份与原子写），不引入 YAML 解析器。
+// 坑：宿主自己也写这个文件；任何“重排/重写”都可能丢掉别的插件配置，所以结构不认识就返回 skipped。
+//     追加前必须确认顶层是列表且没有第二个文档分隔符，否则会产出宿主解析不了的多文档 YAML。
 import { backupBeside, readTextIfExists, replaceAtomically } from './profileFile.ts';
 
 /**
@@ -23,6 +31,7 @@ export type OverlayEdit =
   | { status: 'unchanged' }
   | { status: 'skipped'; reason: string };
 
+// 把 id 当字面量拼进正则：包名里的 . 和 / 不能当通配符。
 const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
@@ -36,6 +45,7 @@ export function hasRow(text: string, id: string): boolean {
 
 /** 文件里的有效行（去掉空行与整行注释）。 */
 function contentLines(text: string): string[] {
+  // 只看有效行；BOM 必须先去，否则第一行会被当成内容的一部分。
   return text.replace(BOM, '').split(/\r?\n/).filter(line => {
     const trimmed = line.trim();
     return trimmed !== '' && !trimmed.startsWith('#');
@@ -44,6 +54,7 @@ function contentLines(text: string): string[] {
 
 /** 空文档：空文件、`[]`、`{}`。这三种可以整份换成我们的块，不算「改写别人的内容」。 */
 function isEmptyDocument(text: string): boolean {
+  // `[]`/`{}` 是宿主初始化写出来的空文档，整份替换不会丢用户内容。
   const lines = contentLines(text);
   if (lines.length === 0) return true;
   return lines.length === 1 && (lines[0]!.trim() === '[]' || lines[0]!.trim() === '{}');
@@ -75,6 +86,7 @@ export function appendVerdict(text: string): { ok: true } | { ok: false; reason:
 
 /** 把一块新内容接到文件末尾；空文档（含 `[]`）整份换成这一块。除末尾多余空行外，原有内容逐字节保留。 */
 function joined(text: string, block: string): string {
+  // 沿用原文的换行风格（CRLF/LF），只去掉末尾多余空白；BOM 单独保存。
   const bom = text.startsWith(BOM) ? BOM : '';
   const body = bom ? text.slice(BOM.length) : text;
   if (isEmptyDocument(body)) return bom + block;
@@ -126,6 +138,7 @@ const INSERT_HEADER = /^-\s*insert\s*:\s*(?:#.*)?$/;
 
 /** 一行是不是这个 id 的 `id`/`name` 字段（旧写法里靠它认出「这块是我们的」）。 */
 function namesRow(line: string, id: string): boolean {
+  // 旧写法里没有顶层 id，只能靠块内 id/name 判断这块是不是我们的。
   return new RegExp(`^\\s*(?:id|name)\\s*:\\s*['"]?${escapeRegExp(id)}['"]?\\s*$`).test(line);
 }
 
@@ -143,6 +156,7 @@ function isMappingInsert(block: readonly string[]): boolean {
 /** 把映射形状的 insert 块改写成数组形状；返回 undefined 表示这块已经是列表、不用改。 */
 function asSequence(block: readonly string[]): string[] | undefined {
   if (!isMappingInsert(block)) return undefined;
+  // 以块内最小缩进为基准，第一行前面补 `- `，其余行右移两格；空行与注释原样保留。
   const base = Math.min(...block.filter(line => line.trim() !== '').map(line => line.length - line.trimStart().length));
   let first = true;
   return block.map(line => {

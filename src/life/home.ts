@@ -1,9 +1,19 @@
+/**
+ * 她的家会话：优先复用记录里的那个，坏了就新建一个，并把「家」固定在房间工作区里。
+ *
+ * 导出：HomeDeps（依赖形状）、createHome。
+ * 调用方：life/runtime.ts，把 LifeHost、故障登记和「当前家」的读写注入进来。
+ * 依赖：node:fs、@deepseek-ai/dsh-agent 的 Agent 类型、faults、worldScope 的 admit、host.ts。
+ * 坑：新建后先把 id 记下来（moveIn）再解析 Agent，任何一步失败都不会留下没人认领的会话；
+ * 标题要等第一轮结束后再改一次，因为宿主会用第一句 prompt 覆盖它；同一时间只允许一次打开。
+ */
 import { mkdirSync } from 'node:fs';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import { errorText, type Faults } from '../faults.ts';
 import { admit, type InWorld } from '../worldScope.ts';
 import type { HostWorkspace, LifeHost } from './host.ts';
 
+/** createHome 需要的外部能力：宿主接口、路径、故障登记，以及「当前家」的读写。 */
 export interface HomeDeps {
   host: LifeHost;
   roomDir: string;
@@ -32,18 +42,21 @@ export interface HomeDeps {
  */
 export function createHome(deps: HomeDeps) {
   const { host, faults } = deps;
+  // 打开过程去重：并发的 open 共享同一个 promise，避免同时建出两个家。
   let opening: Promise<Agent> | undefined;
   /** A new home whose title is not applied yet; retried on the next open. */
   let untitled: string | undefined;
   /** A new home before its first turn ends. */
   let firstTurn: string | undefined;
 
+  // 改名失败只登记故障，不阻断打开；下一次打开还会再试。
   async function rename(sessionId: string): Promise<boolean> {
     try { await host.rename(sessionId, deps.title); faults.clear('rename'); return true; }
     catch (error) { faults.set('rename', `家改名失败：${errorText(error)}`); deps.logger.error(error); return false; }
   }
   async function ready(agent: Agent): Promise<Agent> {
     admit(deps.inWorld, agent);
+    // 只有还是同一个未命名的新家才清标记，避免并发重命名互相覆盖。
     if (untitled === agent.id && await rename(agent.id) && untitled === agent.id) untitled = undefined;
     deps.opened(agent);
     return agent;
@@ -70,6 +83,7 @@ export function createHome(deps: HomeDeps) {
     if (deps.stopped()) throw new Error('生活线已停止');
     untitled = sessionId; firstTurn = sessionId;
     deps.moveIn(sessionId);
+    // 先落盘再解析 Agent：中途失败时重试会复用这个会话，而不是再建一个。
     const agent = await host.resolveAgent(sessionId);
     if (!agent) throw new Error(`dsh-world: the new home ${sessionId} cannot be resolved`);
     return ready(agent);
@@ -78,6 +92,7 @@ export function createHome(deps: HomeDeps) {
     /** The current home, resolving or rebuilding it; one attempt at a time. */
     open(): Promise<Agent> { return opening ??= build().finally(() => { opening = undefined; }); },
     turnEnded(sessionId: string): void {
+      // 第一轮结束后补一次标题：宿主会用第一句 prompt 覆盖建会话时设的标题。
       if (firstTurn !== sessionId || deps.stopped()) return;
       firstTurn = undefined;
       void rename(sessionId).then(ok => { if (!ok && deps.current() === sessionId) untitled = sessionId; });

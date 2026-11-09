@@ -1,3 +1,10 @@
+// 自注册：让宿主 profile 的 dsh.profile.bundles 与 cordis.patch.yml 里都有这个插件。
+//
+// 导出：InstallLogger / SelfRegisterOptions / SelfRegisterReport 类型与 ensureSelfRegistered。
+// 被谁调用：index.ts 启动时调用一次；命令行修复脚本也会走 profilePatch 的修复函数。
+// 依赖：./profileFile.ts、./profilePatch.ts、node:module 的 createRequire 与 ../faults.ts 的 errorText。
+// 坑：两处都是宿主配置，写坏会让 DSH 起不来：bundles 只在 profile 真能解析到包时才写，patch 只在文件结构
+//     确认可以追加时才写；任何一步不满足就跳过并记 warning，宁可这次不注册，也不把宿主写坏。
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { errorText } from '../faults.ts';
@@ -23,6 +30,9 @@ export interface InstallLogger {
   warn(message: string): void;
 }
 
+/**
+ * ensureSelfRegistered 的输入：宿主主目录、包名、日志、要处理的 profile 与可注入的解析判断。
+ */
 export interface SelfRegisterOptions {
   /** `~/.dsh` 之类的宿主主目录；profile 在它下面的 `profiles/<名字>/`。 */
   dshHome: string;
@@ -43,16 +53,19 @@ export interface SelfRegisterReport {
   note?: string;
 }
 
+// 默认只注册桌面版 profile；其它发行版要在这里加。
 const DESKTOP_PROFILES = ['profiles/desktop'] as const;
 
 /** 对每个 profile 做一次自注册，返回各自的结果；整体失败只记 warning，不影响插件本体。 */
 export function ensureSelfRegistered(options: SelfRegisterOptions): SelfRegisterReport[] {
   const { dshHome, packageName, logger } = options;
   const resolvable = options.resolvable ?? resolvesFromProfile;
+  // 一个 profile 失败不阻断下一个：registerProfile 内部已经把异常收敛成 warning。
   return (options.profiles ?? DESKTOP_PROFILES).map(relative =>
     registerProfile(join(dshHome, relative), packageName, resolvable, logger));
 }
 
+/** 对单个 profile 做两处注册；异常在这里收敛成 warning 和当前报告，不影响其它 profile。 */
 function registerProfile(
   profileDir: string,
   packageName: string,
@@ -104,6 +117,7 @@ function ensureBundle(
   logger: InstallLogger,
 ): SelfRegisterReport['bundles'] {
   const bundles = manifest.dsh?.profile?.bundles;
+  // bundles 不是数组就放弃：可能是用户手改的配置，不能猜着改。
   if (!Array.isArray(bundles)) return 'not-a-list';
   if (bundles.includes(packageName)) return 'present';
   if (!canResolve) return 'unresolvable';

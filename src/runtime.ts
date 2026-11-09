@@ -1,3 +1,14 @@
+/**
+ * 世界运行时的装配层：记忆块、提示段、工具与归档四件事，跟着世界与工作区一起进出。
+ *
+ * 导出：WorldPromptSource 类型、createWorldRuntime（start / stop / retryCatchUp / refreshPrompt / flush / faults）。
+ * 调用方：index.ts 在世界启动时建，停机时 stop，工作区服务晚到时 retryCatchUp。
+ * 依赖：宿主的 agent 生命周期钩子（agent/created、pre-step、request、llm/stream）、会话事件、归档、提示段与工具。
+ *
+ * 坑：宿主只在开着的回合与步骤里接受 system/message 写入，所以退役旧记忆块只能等到 pre-step 与 request 两个时机；
+ * 提示与记忆块只在会话开始、压缩后、冷会话醒来时重建，为的是留在 provider 缓存的前缀里；
+ * 会话是否在范围内要反复问（等待前后各一次），期间离开的会话宁可这一轮不注入，也不能带着世界上下文继续跑。
+ */
 import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import { createSystemMessage, createUserMessage, isAgentLoopRequest, type StreamChunk, type UserMessage } from '@deepseek-ai/dsh-llm';
@@ -16,8 +27,11 @@ import { worldNames } from './worldPrompt.ts';
 import { reassembleOnChange } from './worldScope.ts';
 import { DEFAULT_COLD_HOURS, DEFAULT_MEMORY_TURNS } from './worldSwitch.ts';
 
+// 提示源的形状定义在 promptSection.ts，这里转发出去，index.ts 只从运行时拿类型。
 export type { WorldPromptSource } from './promptSection.ts';
+// 记忆块的消息来源标识；宿主和其他插件据此把它当成「不是用户说的话」。
 const memorySource = 'dsh-world-history';
+// 只认我们自己放的记忆块：来源 kind 固定，别的事件即使类型相同也不算。
 const isMemoryBlock = (event: ReturnType<Session['eventAt']>) => event?.type === 'user/message' && event.data.source.kind === memorySource;
 
 /**
@@ -38,11 +52,13 @@ interface MemoryState { reload: boolean; position: { turn: number; step: number 
  * request. A conversation in progress does not pause that long, so its cached prefix stays whole.
  */
 export function createWorldRuntime(ctx: Context, config: WorldConfig, store: ArchiveStore, world?: WorldPromptSource, memoryTurns: () => number = () => DEFAULT_MEMORY_TURNS, coldHours: () => number = () => DEFAULT_COLD_HOURS, now: () => number = Date.now) {
+  // 工作区归档却没有选择器，就没法判断该收谁：启动即失败，比悄悄收错要好。
   if (config.archiveScope === 'workspace' && !world?.archiveSession) throw new Error('Workspace archive requires the host workspace selection');
   const archivedByScope = world?.archiveSession ?? ((sessionId: string) => config.archiveScope !== 'home' || !!world?.isHome(sessionId));
   /** False while some session's workspace was unknown (the host's workspace service was not up yet); `retryCatchUp` reads those later. */
   let undecided = false;
   /** Archiving never fails on unknown membership: the session waits, and what it said is read in order later. */
+  // 成员关系读不到就先不归档，并记下「还没定」；等工作区服务起来再补读。
   const archived = (sessionId: string) => { try { return archivedByScope(sessionId); } catch { undecided = true; return false; } };
   const archive = createSourceArchive(ctx, config, store, archived);
   const history = createHistory(store);
@@ -51,6 +67,7 @@ export function createWorldRuntime(ctx: Context, config: WorldConfig, store: Arc
   const faults = new Faults();
   const prompts = world && createPromptSections(config, world, { logger: ctx.logger });
   const memory = new WeakMap<Session, MemoryState>();
+  // 工具可以有多组，现在只有记忆这一组；以后加组只改这里，挂载与摘除逻辑不用动。
   const toolSets = [world?.memory ? (inside: () => boolean) => memoryTools(world.memory!, inside) : undefined].filter(make => !!make);
   const tools = toolSets.length ? createWorldToolRegistry({ tools: inside => toolSets.flatMap(make => make(inside)), inWorld: agent => !stopped && included(agent.session), faults, logger: ctx.logger }) : undefined;
   /** The memory tools follow world membership, whatever the life line does. */
@@ -66,6 +83,7 @@ export function createWorldRuntime(ctx: Context, config: WorldConfig, store: Arc
 
   function newMemoryState(session: Session): MemoryState {
     const inScope = included(session);
+    // 一开始就不在范围里的会话，第一次进入时要重新开一串请求，不能接着旧的缓存前缀跑。
     return { reload: true, position: { turn: 1, step: 1 }, retiring: [], inScope, restart: !inScope && belongsToWorld(session, config) };
   }
   /**
@@ -118,6 +136,7 @@ export function createWorldRuntime(ctx: Context, config: WorldConfig, store: Arc
   /** Retire old blocks, then admit fresh memory through the host's normal append path (#21). The caller checks the scope after the wait. */
   async function freshBlock(session: Session, state: MemoryState): Promise<UserMessage | undefined> {
     const turns = await history.loadRecentTurns(memoryTurns(), archivedByScope);
+    // 表面上已有的消息不再放进记忆块，否则她刚说过的话会又出现一遍。
     const present = new Set(session.deriveMessages().map(message => message.id));
     const text = renderHistory(excludePresentMessages(turns, present), config.timeZone, names(), config.archiveScope === 'home');
     retireMemory(session, state);
@@ -135,14 +154,18 @@ export function createWorldRuntime(ctx: Context, config: WorldConfig, store: Arc
     try {
       disposers.push(ctx.on('session/event', (session, event) => {
         const state = memory.get(session);
+        // 压缩失败不算数：提示与记忆块都没变，重读一遍只是白丢缓存。
         const compacted = event.type === 'compaction/end' && event.data.error === undefined;
+        // 我们插进去的记忆块真的进了表面，才算这次刷新完成；否则下一步还要重试。
         if (state && event.type === 'user/message' && event.data.id === state.pendingId) { state.reload = false; state.pendingId = undefined; }
         if (state && compacted) { state.reload = true; }
         // The host assembles the system prompt after turn/start, so a cold session's first request already has both.
+        // 冷会话：距上次请求超过阈值，provider 缓存多半已过期，重读一遍记忆与提示比付一次未命中更划算。
         const cold = !!state && event.type === 'turn/start' && state.lastRequestAt !== undefined && now() - state.lastRequestAt >= coldHours() * 60 * 60_000;
         if (cold) state.reload = true;
         if (compacted || cold) prompts?.refresh(session);
         if (!isOrdinarySession(session.header)) return;
+        // 只在这些事件上排回放：每一步都排会把队列塞满，而这几个已经覆盖了「说了话」的时刻。
         if (event.type === 'assistant/message' || event.type === 'turn/end' || event.type === 'turn/start' || event.type === 'compaction/end' || (event.type === 'user/message' && event.data.source.kind === 'user')) void archive.schedule(session.id).catch(() => {});
       }));
       // The host fails the whole session creation when a creation listener rejects, leaving an empty session behind on
@@ -162,13 +185,16 @@ export function createWorldRuntime(ctx: Context, config: WorldConfig, store: Arc
       }
       // Admitted ahead of the step's new input; the host's own admission order (contexts, time-context last) is kept.
       disposers.push(ctx.on('agent/pre-step', async (payload, next) => {
+        // 先让宿主把这一步的输入定下来，再决定要不要在它前面插记忆块。
         const decision = await next();
         const { agent, step, signal } = payload;
         // An empty first step ends the turn; any later step runs anyway, so adding to it is safe.
+        // 空的第一步会直接结束这一轮；往里面塞东西会改变宿主的行为，所以只在真有话要说时才动消息列表。
         if (decision.kind !== 'enter' || (step === 1 && !decision.messages.length) || signal.aborted || !mayCarryWorld(agent.session)) return decision;
         await attach(agent);
         const state = memory.get(agent.session)!;
         const leave = () => {
+          // 本来在范围内的会话离开时，必须重启请求串：否则旧前缀里的世界内容还会被继续用。
           state.restart ||= state.inScope; state.inScope = false;
           retireMemory(agent.session, state);
           const restart = state.restart; state.restart = false;
@@ -178,6 +204,7 @@ export function createWorldRuntime(ctx: Context, config: WorldConfig, store: Arc
         state.inScope = true;
         await archiveNow(agent.id); signal.throwIfAborted();
         if (!included(agent.session)) return leave();
+        // 没有要重读的就不碰消息列表：少改一次，就多保住一次 provider 缓存。
         if (!state.reload) return decision;
         // A block that cannot be built leaves the old one in place; she talks on, the fault shows, and the next step tries again.
         let block: UserMessage | undefined, built = true;
@@ -193,6 +220,7 @@ export function createWorldRuntime(ctx: Context, config: WorldConfig, store: Arc
       disposers.push(ctx.on('agent/request', async function (payload, next) {
         const state = memory.get(payload.agent.session);
         if (state) { state.position = { turn: payload.turn, step: payload.step }; state.lastRequestAt = now(); }
+        // 这是唯一能合法写入空 system/message 的时机：步骤已经开了，请求还没装配。
         if (state?.retiring.length) flushRetired(payload.agent.session, state, state.position);
         return next();
       }));
@@ -201,6 +229,7 @@ export function createWorldRuntime(ctx: Context, config: WorldConfig, store: Arc
         const owned = agent && included(agent.session);
         const inRequest = agent && !owned ? request.messages.filter(message => message.source?.kind === memorySource).length : 0;
         const placed = !!agent && !owned && !!prompts?.active(agent.session);
+        // 不在她世界里的会话却还带着世界内容：拦住这次请求，比让它带着错上下文跑完更诚实。
         if (agent && !owned && (placed || inRequest)) {
           const state = memory.get(agent.session);
           if (state) { retireMemory(agent.session, state); flushRetired(agent.session, state, state.position); state.restart = true; }
@@ -216,6 +245,7 @@ export function createWorldRuntime(ctx: Context, config: WorldConfig, store: Arc
           else yield chunk;
         }
       }));
+      // 启动补读：普通启动回放所有见过的会话；fresh 表示她刚在控制台按下启动，停止期间的话应该跳过。
       await archive.catchUp(options.fresh);
       if (options.fresh) for (const agent of ctx.agents.list()) if (belongsToWorld(agent.session, config)) await archive.skip(agent.id);
       for (const agent of ctx.agents.list()) {
@@ -226,6 +256,7 @@ export function createWorldRuntime(ctx: Context, config: WorldConfig, store: Arc
   }
   function stop(): Promise<void> {
     return stopping ??= (async () => {
+      // 先置位再清理：清理过程中才来的挂载请求应该被拒，不能挂在一半。
       stopped = true;
       prompts?.clear(); tools?.clear();
       for (const dispose of disposers.splice(0).reverse()) dispose();

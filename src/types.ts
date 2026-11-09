@@ -1,8 +1,25 @@
+/**
+ * 插件的数据形状：配置（WorldConfig）与归档记录（ConversationRecord 及其分页、轮次视图）。
+ *
+ * 导出：WorldConfig、DeliveryState、ConversationRecord、ArchiveScope、ArchiveCursor、PageQuery、RecordPage、
+ * ConversationTurn、ArchiveReader。
+ * 调用方：几乎所有模块都只 import 这里的类型；值从哪里来由 store.ts 与 archive.ts 决定。
+ * 依赖：宿主的会话头、微信/QQ 的身份与出口配置，以及归档范围的取值类型。
+ *
+ * 坑：WorldConfig 的字段全是可选的覆盖项，真正生效的默认值在 index.ts 的 schemastery 与 worldSwitch.ts；
+ * ConversationRecord 一旦写进 archive.sqlite 就是原件，只能往后加字段，不能改已有字段的含义。
+ */
+// 【链路位置】B 站相关只有 WorldConfig 里的 dailyBili 与 comment 两段：index.ts 的 Config（schemastery）
+// 给出默认值与校验，apply 读出来后分别交给 createDailyBili（dailyBili 段，见 src/bili/dailyBili.ts）与
+// mirrorCommentConfig（comment 段，镜像进 bili.config.json 供工具链读）。
+// 写在这里的理由：主配置是事实来源，bili.config.json 只是镜像与面板的落点，类型跟着主配置走。
+// 本文件只声明形状，不读盘、不解析、没有运行时副作用。
 import type { OutletConfig } from './ecosystem/shared/outlets.ts';
 import type { SessionHeader } from '@deepseek-ai/dsh-session';
 import type { SpeakerIdentity } from './ecosystem/shared/identity.ts';
 import type { MemoryArchiveScope } from './archiveSelection.ts';
 
+/** 插件配置：世界标识、预设、时区，以及各条线（记忆、生活、渠道、B 站）自己的开关与路径。 */
 export interface WorldConfig {
   worldId: string;
   agentPreset: string;
@@ -58,6 +75,11 @@ export interface WorldConfig {
   toastAppId?: string;
   /** Names besides this machine the console and the bridge answer to (a LAN address or domain behind a reverse proxy). */
   allowedHosts?: string[];
+  // dailyBili 段的字段各有去处：enabled 决定 startLife 里建不建定时器；dailyTime 只在工具链
+  // 模块缺失时兜底；dailyMaxVideos 进 DailyBiliOptions 与 prompt 的条数上限；allowWrite 既是 prompt 里的
+  // 干跑提示，也镜像成 bili.config.json 的 comment.allowWrite（真发总开关）；napcatHttp / ownerQQ 只用于
+  // prompt 末尾「把动态摘要发 QQ」那一段。作息窗口不在这里：wakeTime / reviewTime 由 world.json 决定，
+  // B 站只读不改。
   /** 每日 B 站打卡：定时唤醒 home session，让 agent 刷视频→深读→写动态→发 QQ 通知主人。 */
   dailyBili?: {
     /** 开/关；显式写出来才开（防不小心误启动）。 */
@@ -73,6 +95,9 @@ export interface WorldConfig {
     /** 真发开关（对应工具链 guard.dryRun=false 才生效；dailyBili 这里再兜一层）。 */
     allowWrite?: boolean;
   };
+  // comment 段由 mirrorCommentConfig 镜像成 bili.config.json 的 comment 段，工具链的 comment 命令
+  // 读那份文件（config() 不缓存，改完下一次读就生效）；真发还要求同文件的 allowWrite，而它来自 dailyBili。
+  // enabled 改完要重启才装上新路由；hardDailyMax 是面板 dailyMax 的上限；minIntervalSec 是两条评论的最小间隔。
   /** 给视频发顶层评论（不回复任何人）；真发还要求 `dailyBili.allowWrite`。 */
   comment?: {
     /** 功能开关，默认关。 */
@@ -85,7 +110,9 @@ export interface WorldConfig {
   // 外面那个 qq-bridge 进程在 2026-10-27 拆掉了，它的五个配置键（qqBridgeDir/Port/Node/AutoStart/
   // BindHomeSession）一起没了：QQ 现在由 qqNative 自己直连 OneBot。
 }
+/** 一条待发消息的投递状态：pending 未确认、sent 全部发出、uncertain 中间某条不明、failed 明确失败。 */
 export interface DeliveryState { status: 'pending' | 'sent' | 'uncertain' | 'failed'; confirmed: number; total: number }
+/** 归档里的一行：谁在什么时候说了什么，带来源会话、消息与轮次，用来去重和排轮次。 */
 export interface ConversationRecord extends Partial<SpeakerIdentity> {
   schemaVersion: 1;
   worldId: string;
@@ -97,34 +124,45 @@ export interface ConversationRecord extends Partial<SpeakerIdentity> {
   role: 'user' | 'assistant';
   occurredAt: string;
   content: string;
+  // interrupted 表示那条回复没说完（被打断或撞上输出上限）；记忆仍照收，只是标出来。
   status: 'complete' | 'interrupted';
   wechatDelivery?: DeliveryState;
 }
+/** 归档一条事件时需要知道的上下文：世界、会话头、继承来但不算她的话的事件数，以及当前轮次。 */
 export interface ArchiveScope {
   worldId: string;
   header: SessionHeader;
+  // 这个会话从父会话抄来的前缀长度：它之前的事件已经记在父会话名下。
   inheritedEventCount: number;
   turn: number;
 }
+/**
+ * 分页游标：上一页最后一行的排序键，外加取游标时的最大 sequence。
+ * 带上 maxSequence 是为了让翻页期间新写入的行不会挤进后面的页，造成重复或漏读。
+ */
 export interface ArchiveCursor {
   date: string;
   occurredAt: string;
   recordId: string;
   maxSequence: number;
 }
+/** 读一页的请求：可选游标与条数上限。 */
 export interface PageQuery {
   before?: ArchiveCursor;
   limit: number;
 }
+/** 读一页的结果：记录与下一页游标；没有下一页时不带 nextCursor。 */
 export interface RecordPage {
   records: ConversationRecord[];
   nextCursor?: ArchiveCursor;
 }
+/** 一轮：同一 turnId 下按发言顺序排列的记录，轮到记忆里的一行 JSON。 */
 export interface ConversationTurn {
   turnId: string;
   occurredAt: string;
   messages: ConversationRecord[];
 }
+/** 记忆层需要的只读归档接口：按页读与按轮读；写入不经过这里。 */
 export interface ArchiveReader {
   readPage(query: PageQuery): Promise<RecordPage>;
   readTurn(turnId: string, afterSeq?: number, limit?: number): Promise<ConversationRecord[]>;

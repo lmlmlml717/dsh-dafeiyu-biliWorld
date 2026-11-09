@@ -1,3 +1,20 @@
+/**
+ * 生活线的装配处：一个待响的闹钟、她的家、新家问候、每日回顾、花费与工具，全在这里接起来。
+ *
+ * 导出：LifeDeps、createLifeRuntime、LifeRuntime 类型。
+ * 调用方：插件入口在启动/停止生活线时创建它，控制台通过返回的 snapshot/reschedule 读取和改作息。
+ * 依赖：home、alarm、alarmTimer、earlyStop、journal、toolRegistry、photos、pricing、lifeStore 等。
+ * 坑：投递以「宿主日志里出现这条 user/message」为准，不是 steer 不抛错就算送达；
+ * 一句话先写进 life.json 再发，崩溃或重载后靠 reconcile 判定已送达、还在排队，还是重发。
+ */
+/**
+ * 【链路位置】
+ * 整条日记/回顾链路的装配与驱动：排期、到点投递、日记守卫、控制台读取都从这里接出去。
+ * 上游：插件入口在启动/停止生活线时创建它；控制台经 snapshot 读作息、经 setSchedule 改作息。
+ * 下游：nextReview/reviewOf/reviewText 算时刻与文案，say()/deliver() 送进她的家；closedDiaryRefusal 经 guard 拦住改写。
+ * 读写：life.json（state）、worlds/<worldId>/diary/YYYY-MM-DD.md（经她的 write/edit）、回顾材料与我是谁（selfFile）。
+ * 时序：start 排第一次 → 到点 deliver → 她开始这一步后 confirmed → lookBack 在投递前把 state.review 滚到下一天。
+ */
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Context } from '@deepseek-ai/cordis';
@@ -33,9 +50,12 @@ import type { PhotoStore } from './photos.ts';
 import { photoTools } from './photoTools.ts';
 import type { Alarm, Greeting, LifeOptions, PendingWake, Review, WakeRecord } from './types.ts';
 
+// 5 分钟还没开始第一步就在控制台报「卡住了」，而不是无限等下去。
 /** How long a word may sit in her home without its turn starting a step before the console says so. */
 const STALL_MINUTES = 5;
+// 有值才放进对象：模板变量里空字符串和「没有」不是一回事。
 const withValue = <K extends string>(key: K, value: string | undefined) => (value === undefined ? {} : { [key]: value }) as Partial<Record<K, string>>;
+/** 生活线的全部依赖；除 ctx/config/store/host/notifier 外都可替换，便于测试。 */
 export interface LifeDeps {
   ctx: Context; config: WorldConfig; options: LifeOptions; store: LifeStore; host: LifeHost; notifier: Notifier; clock?: () => Date; timers?: LifeTimers;
   /** CNY her home may spend a day; undefined or absent is no limit. */
@@ -63,6 +83,7 @@ export function createLifeRuntime(deps: LifeDeps) {
   const faults = new Faults();
   const includes = (session: Agent['session']) => inWorld(session, config, deps.inWorkspace);
   const disposers: (() => void)[] = [];
+  // 状态只在内存里改，再由 record() 统一落盘；life.json 坏了会在这里直接抛。
   const state = store.read();
   let stopped = false;
   let delivery: Promise<void> | undefined;
@@ -93,9 +114,12 @@ export function createLifeRuntime(deps: LifeDeps) {
     const records = days.flatMap(each => store.activity(each)).sort((a, b) => Date.parse(a.time) - Date.parse(b.time));
     return summarizeSince(records, alarm.setAt, now);
   };
-  const lifeMessage = (text: string) => createUserMessage({ source: { kind: 'dsh-world-life' }, content: [{ type: 'text', text }] });
-  const say = (agent: Agent, message: string | UserMessage) => {
-    admit(includes, agent).steer(typeof message === 'string' ? lifeMessage(message) : message);
+  // lifeKind 只用于"这条生活线消息是什么性质"：闹钟到点（默认）会被 QQ 转发给主人；
+  // 提前停下（early-stop）不转发——那是插件在问她自己，不是她要说给主人听的话（0.8.20）。
+  const lifeMessage = (text: string, lifeKind?: 'alarm' | 'early-stop') => createUserMessage({ source: { kind: 'dsh-world-life', ...(lifeKind ? { lifeKind } : {}) }, content: [{ type: 'text', text }] });
+  const say = (agent: Agent, message: string | UserMessage, lifeKind?: 'alarm' | 'early-stop') => {
+    // 用 steer 放进她的收件箱，再由 flush 保证宿主已经落盘，重启后才找得到。
+    admit(includes, agent).steer(typeof message === 'string' ? lifeMessage(message, lifeKind) : message);
     return ctx.sessions.flush(agent.session);
   };
 
@@ -106,6 +130,7 @@ export function createLifeRuntime(deps: LifeDeps) {
   const queued = (agent: Agent, id: string) => [...agent.inbox.nextStep, ...agent.inbox.nextTurn].some(message => message.id === id);
   let stallTimer: unknown;
   function watchStall(pending: PendingWake): void {
+    // 到点还停在 delivering 就报卡住；之后任何一次确认都会清掉这条故障。
     if (stallTimer !== undefined) timers.clear(stallTimer);
     stallTimer = timers.set(() => {
       stallTimer = undefined;
@@ -144,6 +169,7 @@ export function createLifeRuntime(deps: LifeDeps) {
    * (watched as if just sent), or gone with the turn that took it (sent again).
    */
   function reconcile(agent: Agent): void {
+    // 先看日志：有这条 user/message 就是跑过了；否则看在不在收件箱/正在跑；都没有就是丢了。
     const pending = state.delivering;
     if (!pending) return;
     if (pending.sessionId !== agent.id) return neverRan('家换过了');
@@ -166,7 +192,13 @@ export function createLifeRuntime(deps: LifeDeps) {
   // Her alarm.
   // What is delivered next: a new home's greeting first, then whichever of the look back and her alarm is due sooner.
   type Job = { kind: 'greeting'; at: string; greeting: Greeting } | { kind: 'review'; at: string; review: Review } | { kind: 'alarm'; at: string; alarm: Alarm };
+  /**
+   * 谁调用：createAlarmTimer 的 dueAlarm 与 deliver 的开头，每次只问「现在该做什么」。
+   * 参数：无，读 state；返回问候/回顾/闹钟里最早的一个，都没有时 undefined。
+   * 优先级：新家问候先于到点的回顾或闹钟；回顾与闹钟同时到点，回顾先走。
+   */
   function nextJob(): Job | undefined {
+    // 优先级：新家问候 > 到点更早的那个（回顾或闹钟）。
     const { greeting, review, alarm } = state;
     if (greeting) return { kind: 'greeting', at: greeting.at, greeting };
     if (review && (!alarm || Date.parse(review.at) <= Date.parse(alarm.at))) return { kind: 'review', at: review.at, review };
@@ -209,6 +241,11 @@ export function createLifeRuntime(deps: LifeDeps) {
    * world was stopped). The pending look back keeps its day; the plugin's morning alarm moves to the new time after
    * it was set, at once if that has passed. An alarm of hers is left alone. True when anything moved.
    */
+  /**
+   * 谁调用：插件入口的 setSchedule（控制台保存作息后）调 reschedule；start() 里直接跑一次 followSchedule。
+   * 语义：待办的回顾保留原来的回看日、只改时刻；插件自己的兜底闹钟跟着新时间，她定的闹钟不动。
+   * 返回：有东西移动过就 true，调用方据此决定要不要落盘并重排。
+   */
   function followSchedule(): boolean {
     const now = clock(), { review, wake: morningTime } = options.schedule();
     const timeOf = (at: string) => formatLocalTime(new Date(at), timeZone).slice(11, 16);
@@ -227,6 +264,11 @@ export function createLifeRuntime(deps: LifeDeps) {
   }
 
   // Delivery: one at a time, the next only once the last started a step; a failure backs off, and a newer alarm keeps its own time.
+  /**
+   * 谁调用：alarmTimer 到点 fire，控制台手动触发时也会调。
+   * 保证：一次只送一个；上一个还没开始下一步就不送下一个；没有待办时返回已有的 promise。
+   * 失败：各 job 自己登记故障并退避，这里只负责不并发。
+   */
   function deliver(): Promise<void> {
     const job = nextJob();
     if (stopped || !job || state.delivering) return delivery ?? Promise.resolve();
@@ -267,9 +309,21 @@ export function createLifeRuntime(deps: LifeDeps) {
   const greet = (greeting: Greeting) => sayOwn(greeting.kind === 'arrival' ? '新家的第一句话' : '重新开始的那句话', greeting.kind === 'arrival' ? 'first' : 'return', greeting.at, { greeting },
     () => { delete state.greeting; }, () => { state.greeting ??= greeting; },
     () => greetingText(greeting.kind, timeZone, wake(), alarmMessages(), templateValues()));
+  /**
+   * 【上游参考】
+   * 生活线骨架（alarm/journal/runtime 的闹钟+回顾模型）来自 dsh-dafeiyu-life；
+   * 这里保留「一个待响的闹钟 + 一次每日回顾」，把投递、日记守卫与故障登记接到 DSH 宿主上。
+   */
+  // 回顾正在进行的那一天：它的日记在那一轮结束前都算开着，跨过午夜也一样。
   /** The day whose look back her home is in now: its diary stays open until that turn ends, even past midnight. */
   let reviewing: string | undefined;
   /** A day's diary is open until its look back has ended: today, and a day whose look back is still to come or under way. */
+  /**
+   * 谁调用：runtime 的 tools guard，每次宿主工具调用前算一次。
+   * 参数：today 是配置时区里的今天。
+   * 返回：今天 + 回顾还没结束的那一天 + 正在回顾的那一天；跨过午夜也仍然算开着。
+   * 用途：这份集合交给 closedDiaryRefusal，只有不在集合里的日记才拦。
+   */
   function openDiaryDays(today: string): Set<string> {
     const days = new Set([today]);
     if (state.review && state.review.day < today) days.add(state.review.day);
@@ -277,6 +331,12 @@ export function createLifeRuntime(deps: LifeDeps) {
     return days;
   }
   /** The evening look back on her day; her 我是谁 is kept as it was, so she can rewrite it freely. */
+  /**
+   * 谁调用：deliver 在 job.kind === 'review' 时。
+   * 时机：回顾到点、家已打开；take 里把 reviewing 置为回看日，并把它滚到下一天。
+   * 写：回顾前用 keepSelfCopy 给我是谁留底，留底失败只登记 snapshot 故障，不挡回顾。
+   * 失败：投递失败时 sayOwn 会把 state.review 放回去，并按闹钟的退避重试。
+   */
   function lookBack(review: Review): Promise<void> {
     let snapshot: string | undefined;
     const take = () => {
@@ -327,15 +387,17 @@ export function createLifeRuntime(deps: LifeDeps) {
     const now = clock(); const alarm = state.alarm;
     if (!earlyStop.turnEnded(completed, alarm, now) || stopped) return;
     alarm.nudged = true;
+    // 先把「问过了」落盘再发，崩溃重载后不会对同一个闹钟再问一遍。
     record(() => store.write(state));
     earlyStop.startsOwnTurn();
     const text = earlyStopText(alarm, now, timeZone, alarmMessages(), templateValues());
-    void home.open().then(agent => stopped ? undefined : say(agent, text)).catch(error => { earlyStop.ownTurnFailed(); ctx.logger.error(error); });
+    void home.open().then(agent => stopped ? undefined : say(agent, text, 'early-stop')).catch(error => { earlyStop.ownTurnFailed(); ctx.logger.error(error); });
   }
 
   // What her home spends: each model step priced as it lands; past the daily budget she is told once that day.
   function spent(usage: Parameters<typeof stepCost>[0], model: string): void {
     const now = clock(); const day = formatLocalTime(now, timeZone).slice(0, 10);
+    // 跨天先换账本：午夜后的调用算新的一天，额度也跟着重算。
     const spend = state.spend?.day === day ? state.spend : (state.spend = { day, yuan: 0 });
     spend.yuan += stepCost(usage, model, now);
     const budget = deps.dailyBudget?.();
@@ -354,6 +416,7 @@ export function createLifeRuntime(deps: LifeDeps) {
 
   // Her tools and her home.
   const notifier: Notifier = {
+    // 通知和出口都包一层故障登记：送不到要在控制台看得见，但不影响 reach_out 已经送到的部分。
     ...(deps.notifier.toast ? { toast: (title: string, body: string) => faults.track('toast', '系统通知没送到', () => deps.notifier.toast!(title, body)) } : {}),
     outlets: deps.notifier.outlets.map(outlet => ({ ...outlet, send: push => faults.track(`outlet:${outlet.name}`, `${outlet.name}没送到`, () => outlet.send(push)) })),
   };
@@ -362,6 +425,7 @@ export function createLifeRuntime(deps: LifeDeps) {
     inWorld: agent => !stopped && includes(agent.session),
     isHome: agent => agent.id === state.homeSessionId,
     guard: ({ name, arguments: args, agent }) => {
+      // 已经合上的那天的日记不能再改：写错了就写进今天，原来的记忆保持原样。
       const today = formatLocalTime(clock(), timeZone).slice(0, 10);
       return closedDiaryRefusal(name, args, options.diaryDir, agent?.session.header.cwd ?? options.roomDir, openDiaryDays(today), today);
     },
@@ -370,6 +434,7 @@ export function createLifeRuntime(deps: LifeDeps) {
       ...deps.photos ? photoTools({ agent, store: deps.photos, attachments: () => ctx.get('attachments') as AttachmentStore | undefined, inside: () => !stopped && agent.id === state.homeSessionId && includes(agent.session) }) : [],
     ],
   });
+  // 在家且在世界上才挂工具，否则摘掉；pre-step 每次都会重算。
   const attach = (agent: Agent) => !stopped && includes(agent.session) ? tools.attach(agent) : tools.detach(agent);
   const home = createHome({
     host, roomDir: options.roomDir, agentPreset: config.agentPreset, title: homeTitle(names), roomTitle: roomTitle(names), faults, logger: ctx.logger,
@@ -388,7 +453,14 @@ export function createLifeRuntime(deps: LifeDeps) {
   const journal = createJournal({ store, faults, roomDir: options.roomDir, logger: ctx.logger });
 
   /** `resumed`: started again from the console; unless an alarm of her own is pending, she is told she is back. */
+  /**
+   * 谁调用：插件入口启动生活线时；resumed 表示从控制台重新启动。
+   * 做的事：注册监听、补排今晚的回顾、跟随控制台作息、打开家、reconcile 上次没开始的投递、
+   *   按需排兜底闹钟，最后 arm 定时器。
+   * 失败：家打不开只登记 home 故障，不让整个启动崩掉。
+   */
   async function start(options: { resumed?: boolean } = {}): Promise<void> {
+    // 监听只注册一次；stop 时按相反顺序拆掉。
     disposers.push(
       ctx.on('agent/created', ({ agent }) => { attach(agent); return undefined; }),
       reassembleOnChange(ctx, attach),
@@ -407,7 +479,13 @@ export function createLifeRuntime(deps: LifeDeps) {
         if (session.id !== state.homeSessionId) return;
         journal.home(session, event);
         if (event.type === 'assistant/message' && event.data.usage) spent(event.data.usage, event.data.message.source.model);
-        if (event.type === 'user/message' && event.data.source.kind === 'user') earlyStop.partnerSpoke();
+        if (event.type === 'user/message') {
+          if (event.data.source.kind === 'user') earlyStop.partnerSpoke();
+          // 只认 B 站唤醒这一种：它是插件直接 steer 进来的，不走 sayOwn，所以逐轮标记的 ownTurn 收不到它。
+          // 0.8.21 实测：手动「立即触发一次」后这一轮结束被当成提前收工，问了一句「现在才 16:30，这一轮就停了」——
+          // 她其实就在做饭。闹钟/问候/回顾走 sayOwn，本来就标了 ownTurn，不要在这里重复放行别的来源。
+          else if (event.data.source.kind === 'dsh-world-life' && (event.data.source as { lifeKind?: string }).lifeKind === 'bili-wake') earlyStop.startsOwnTurn();
+        }
         // Before the fallback below, so a word whose turn never ran goes back first.
         const pending = state.delivering;
         if (pending && pending.sessionId === session.id) {
@@ -426,6 +504,7 @@ export function createLifeRuntime(deps: LifeDeps) {
       }),
     );
     for (const agent of ctx.agents.list()) attach(agent);
+    // 第一次启动时排上今晚的回顾；之后按日期滚动，不重复排。
     if (!state.review) { state.review = nextReview(clock(), timeZone, deps.options.schedule().review); record(() => store.write(state)); }
     if (followSchedule()) record(() => store.write(state));
     try {
@@ -439,6 +518,7 @@ export function createLifeRuntime(deps: LifeDeps) {
     timer.arm();
   }
   function stop(): void {
+    // 先置 stopped 再拆监听：回调里看到 stopped 就不会再排新的活。
     if (stopped) return;
     stopped = true;
     timer.stop();
@@ -456,4 +536,5 @@ export function createLifeRuntime(deps: LifeDeps) {
     isHome: (sessionId: string) => !stopped && sessionId === state.homeSessionId,
   };
 }
+/** createLifeRuntime 的返回类型。 */
 export type LifeRuntime = ReturnType<typeof createLifeRuntime>;

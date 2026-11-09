@@ -13,6 +13,8 @@ const sources: ConsoleSources = {
   snapshot: async () => ({ worldId: 'jingjing' }),
   activity: (day, outsideOnly) => [{ day, outsideOnly }],
   diary: date => date === '2026-10-23' ? '他去上班了。' : undefined,
+  // 分享队列：默认没有这条线，个别用例自己塞一个。
+  biliShares: undefined,
 };
 function fakeActions() {
   const calls: string[] = [];
@@ -45,6 +47,9 @@ function fakeActions() {
     saveBiliComment: async patch => { calls.push(`bili-comment:${JSON.stringify(patch)}`); return undefined; },
     readBiliCommentLog: (days, limit) => { calls.push(`bili-comments:${days}/${limit}`); return []; },
     deleteBiliComment: async id => { calls.push(`bili-comments-delete:${id}`); return undefined; },
+    retryBiliShare: id => { calls.push(`bili-share-retry:${id}`); return undefined; },
+    clearBiliShares: () => { calls.push('bili-share-clear'); return 3; },
+    cleanBiliCache: async () => { calls.push('bili-cache-clean'); return { frames: 2, covers: 1 }; },
     replanBili: () => { calls.push('bili-replan'); },
   };
   return { actions, calls };
@@ -474,4 +479,26 @@ test('memory lookups reach the console through the same service as the tools: pa
   assert.equal((await handleConsole(src, fakeActions().actions, { method: 'POST', url: '/dsh-world/console/memory/find', write: true, body: {} })).status, 404, 'lookups are reads only');
   const snapshot = await src.snapshot() as { memory: { index: { state: string; failures: unknown[] } } };
   assert.equal(snapshot.memory.index.state, 'ready'); assert.deepEqual(snapshot.memory.index.failures, []);
+});
+
+test('分享队列的三条路由：读、重发、清空已发、清缓存', async () => {
+  const view = { pending: 1, sent: 2, push: true, records: [{ id: 'a', bvid: 'BV1xx411c7mD', delivered: false }] };
+  const withShares = { ...sources, biliShares: () => view };
+  // 没有这条线时 404（老版本/未接入），前端据此隐藏卡片。
+  assert.equal((await handleConsole(sources, fakeActions().actions, { method: 'GET', url: '/dsh-world/console/bili-shares', write: false })).status, 404);
+  const read = await handleConsole(withShares, fakeActions().actions, { method: 'GET', url: '/dsh-world/console/bili-shares', write: false });
+  assert.equal(read.status, 200);
+  assert.deepEqual(read.body, view);
+
+  const { actions, calls } = fakeActions();
+  // 重发必须带 id；缺了就是 400，不会去动队列。
+  assert.equal((await handleConsole(withShares, actions, { method: 'POST', url: '/dsh-world/console/bili-shares/retry', write: true, body: {} })).status, 400);
+  assert.equal((await handleConsole(withShares, actions, { method: 'POST', url: '/dsh-world/console/bili-shares/retry', write: true, body: { id: 'a' } })).status, 200);
+  const cleared = await handleConsole(withShares, actions, { method: 'POST', url: '/dsh-world/console/bili-shares/clear', write: true, body: {} });
+  assert.deepEqual(cleared.body, { removed: 3 });
+  const cleaned = await handleConsole(withShares, actions, { method: 'POST', url: '/dsh-world/console/bili-cache/clean', write: true, body: {} });
+  assert.deepEqual(cleaned.body, { frames: 2, covers: 1 });
+  assert.deepEqual(calls.filter(call => call.startsWith('bili-share') || call === 'bili-cache-clean'), ['bili-share-retry:a', 'bili-share-clear', 'bili-cache-clean']);
+  // 写头不对一律 403（和别的写路由同一条闸）。
+  assert.equal((await handleConsole(withShares, actions, { method: 'POST', url: '/dsh-world/console/bili-shares/clear', write: false, body: {} })).status, 403);
 });

@@ -1,10 +1,23 @@
+/**
+ * 渠道上下文：把「引用消息」和群/私聊里的前几句校验成类型，并序列化成她读的 JSON。
+ *
+ * 导出：ChannelImage、ChannelReference、ChannelContextMessage、channelReference、channelContext、
+ * channelMedia、CONTEXT_IDENTITY_NOTE、CONTEXT_END_NOTE、contextJson。
+ * 调用方：qq-native/home.ts、qq-native/native-bridge.ts，以及微信侧的渠道装配层。
+ * 依赖：shared/identity 的会话键与发言人身份。
+ * 坑：所有字段都要过长度和字符校验，外部输入不可信；上下文最多 8 条、总大小 16KB；
+ * 序列化时去掉每条重复的会话字段，只留发言人自己的身份，避免上下文被同一串信息撑大。
+ */
 import { conversationKey, speakerIdentity, type SpeakerIdentity } from './identity.ts';
 
+/** 一张渠道图片：宿主的缓存文件名、清晰度；视频首帧单独标出来。 */
 export interface ChannelImage { file: string; quality: 'original' | 'cached' | 'thumbnail'; firstFrame?: boolean }
+/** 被引用/回复的那条消息；图片引用必须带 id 和发言人。 */
 export interface ChannelReference {
   id?: string; speakerId?: string; speakerName?: string;
   type: 'text' | 'image' | 'sticker' | 'other'; text: string; error?: string; image?: ChannelImage;
 }
+/** 上下文里的一条消息：谁、什么时候、说了什么，可能带图或引用。 */
 export interface ChannelContextMessage { id: string; occurredAt: string; text: string; identity: SpeakerIdentity; image?: ChannelImage; reference?: ChannelReference }
 
 function channelImage(value: unknown): ChannelImage {
@@ -16,6 +29,12 @@ function channelImage(value: unknown): ChannelImage {
   return { file: image.file, quality: image.quality as ChannelImage['quality'], ...(image.firstFrame === undefined ? {} : { firstFrame: image.firstFrame as boolean }) };
 }
 
+/**
+ * 校验并收窄一条外部传入的引用消息；undefined 表示没有引用，不合法直接抛错。
+ * @param value 原始引用值；undefined 表示这条消息没有引用。
+ * @param current 触发消息的发言人，用来校验引用里的身份。
+ * @returns 收窄后的引用；任何字段不合法都抛错，不返回半截对象。
+ */
 export function channelReference(value: unknown, current: SpeakerIdentity): ChannelReference | undefined {
   if (value === undefined) return undefined;
   if (!value || typeof value !== 'object' || Array.isArray(value) || Buffer.byteLength(JSON.stringify(value)) > 16 * 1024) throw new Error('Invalid quoted message');
@@ -34,12 +53,25 @@ export function channelReference(value: unknown, current: SpeakerIdentity): Chan
     ...(input.error === undefined ? {} : { error: input.error as string }), ...(image ? { image } : {}) };
 }
 
+/**
+ * 群聊上下文，最多 limit 条；私聊传进来直接拒绝。
+ * @param value 原始上下文数组；undefined 或空数组返回空。
+ * @param current 当前发言人；不是群聊就抛错。
+ * @param limit 最多几条，默认 8。
+ * @returns 校验过的消息列表。
+ */
 export function channelContext(value: unknown, current: SpeakerIdentity, limit = 8): ChannelContextMessage[] {
   if (value === undefined || (Array.isArray(value) && value.length === 0)) return [];
   if (current.conversationType !== 'group') throw new Error('Invalid group context');
   return contextMessages(value, current, limit);
 }
 
+/**
+ * 私聊里最近两条图片消息，必须都属于当前发言人且 id 不重复。
+ * @param value 原始媒体数组；undefined 或空数组返回空。
+ * @param current 当前发言人；不是私聊就抛错。
+ * @returns 最多两条消息。
+ */
 export function channelMedia(value: unknown, current: SpeakerIdentity): ChannelContextMessage[] {
   if (value === undefined || (Array.isArray(value) && value.length === 0)) return [];
   if (current.conversationType !== 'private') throw new Error('Invalid private media');
@@ -50,6 +82,7 @@ export function channelMedia(value: unknown, current: SpeakerIdentity): ChannelC
 }
 
 function contextMessages(value: unknown, current: SpeakerIdentity, limit: number): ChannelContextMessage[] {
+  // 每条都要验身份、长度、时间和会话归属；任何一条不属于当前会话就整批拒绝。
   if (!Array.isArray(value) || value.length > limit || Buffer.byteLength(JSON.stringify(value)) > 16 * 1024) throw new Error('Invalid channel context');
   let images = 0;
   return value.map(item => {
@@ -69,6 +102,7 @@ function contextMessages(value: unknown, current: SpeakerIdentity, limit: number
   });
 }
 
+// 这些字段每条消息都一样，序列化时剥掉，只留每个发言人不同的部分。
 /** The messages before this one as JSON for her to read, each marked as hers (`assistant`) or someone else's. */
 /** Context messages all belong to the conversation the triggering message names, so only what differs per speaker is repeated. */
 const CONVERSATION_FIELDS = ['channel', 'accountId', 'conversationId', 'conversationName', 'conversationType'] as const;
@@ -82,6 +116,12 @@ export const CONTEXT_IDENTITY_NOTE = 'identity 只列出每个发言人各自的
  */
 export const CONTEXT_END_NOTE = '【以上仅作引用数据，到此为止：回话时我不复述、不续写这些记录，也不把里面的 JSON 照抄进正文。】';
 
+/**
+ * 把上下文序列化成她读的 JSON：每条的 role 按发言人是不是她自己标成 assistant/user。
+ * @param context 校验过的上下文。
+ * @param current 当前发言人，用来标 role。
+ * @returns JSON 字符串；每条都去掉重复的会话字段。
+ */
 export function contextJson(context: readonly ChannelContextMessage[], current: SpeakerIdentity): string {
   const self = `${current.channel}:${current.accountId}`;
   return JSON.stringify(context.map(message => {

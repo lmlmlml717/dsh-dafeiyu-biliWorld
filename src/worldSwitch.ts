@@ -1,9 +1,21 @@
+/**
+ * 世界的开关与设置：是否运行、每日预算、记忆轮数、冷会话阈值、归档范围、工作区权限、微信/QQ 模块与作息。
+ *
+ * 导出：默认值与上限常量、createWorldSwitch（读 world.json 并提供读写）、WorldSwitch 类型，以及几个校验函数。
+ * 调用方：index.ts 建一份；控制台动作、runtime.ts、生活线、微信与 QQ 模块都从这里读设置。
+ * 依赖：life/lifeStore.ts 的 durableWrite、life/alarm.ts 的时间校验、archiveSelection 的范围校验。
+ *
+ * 坑：world.json 可能被手改坏或只写了一半，解析失败只当「没存过」并登记故障，绝不在 load 阶段抛错 ——
+ * 抛错会让整个插件起不来，控制台和所有路由一起消失。设置只在内存里改完再整份写回；默认值不落盘，
+ * 只有非默认值才写进去，这样以后改默认值时老世界也能跟着变。
+ */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { durableWrite } from './life/lifeStore.ts';
 import { validArchiveScope, type MemoryArchiveScope } from './archiveSelection.ts';
 import { DEFAULT_REVIEW_TIME, validClockTime } from './life/alarm.ts';
 
+/** world.json 里存的东西：全部可选，缺的项按默认值算。 */
 interface WorldSettings { running: boolean; dailyBudget?: number; memoryTurns?: number; coldHours?: number; archiveScope?: MemoryArchiveScope; workspacePermission?: string; wechatContext?: number; wechatBufferSeconds?: number; wechatEnabled?: boolean; qqEnabled?: boolean; compactAfterReview?: boolean; compactionSwapped?: boolean; reviewTime?: string; wakeTime?: string }
 /** How many of the newest turns the memory block carries when nothing else is set. */
 export const DEFAULT_MEMORY_TURNS = 200;
@@ -11,6 +23,7 @@ export const DEFAULT_MEMORY_TURNS = 200;
 export const DEFAULT_COLD_HOURS = 24, MAX_COLD_HOURS = 720;
 /** WeChat group messages read before a mention, and seconds a private image waits for its companions. */
 export const DEFAULT_WECHAT_CONTEXT = 5, MAX_WECHAT_CONTEXT = 20;
+// 与上一条共用上面那句说明：私聊里连发的图片先攒 3 秒，等上下文凑齐再一起读。
 export const DEFAULT_WECHAT_BUFFER_SECONDS = 3, MAX_WECHAT_BUFFER_SECONDS = 30;
 
 /**
@@ -34,6 +47,7 @@ export function createWorldSwitch(worldDir: string, configuredScope: MemoryArchi
     }
   }
   let settings: WorldSettings = {
+    // 从旧版本升上来的世界已经有生活线：没有 world.json 时按 life.json 在不在判断它本来就在跑。
     running: stored ? stored.running === true : existsSync(join(worldDir, 'life.json')),
     ...(typeof stored?.dailyBudget === 'number' ? { dailyBudget: stored.dailyBudget } : {}),
     ...(validTurns(stored?.memoryTurns) ? { memoryTurns: stored.memoryTurns } : {}),
@@ -49,7 +63,9 @@ export function createWorldSwitch(worldDir: string, configuredScope: MemoryArchi
     ...(validClockTime(stored?.reviewTime) ? { reviewTime: stored.reviewTime } : {}),
     ...(validClockTime(stored?.wakeTime) ? { wakeTime: stored.wakeTime } : {}),
   };
+  // 启动时定下的范围：改配置只影响下次启动，所以「当前生效」与「已选择」要分开报，才能提示重启。
   const activeScope = settings.archiveScope ?? configuredScope;
+  // 整份写回：world.json 只有一份，不做增量，读的时候就不会读到半套设置。
   function save(next: WorldSettings): void {
     durableWrite(file, JSON.stringify(next, null, 2));
     settings = next;
@@ -105,6 +121,7 @@ export function createWorldSwitch(worldDir: string, configuredScope: MemoryArchi
     qqEnabled: () => settings.qqEnabled === true,
     setModules(next: { wechat?: boolean; qq?: boolean }): void {
       const { wechatEnabled, qqEnabled, ...rest } = settings;
+      // qqEnabled 只在为 true 时落盘：关掉就是没有这个键，默认即关，文件也不会越写越乱。
       const wechat = next.wechat ?? wechatEnabled ?? existsSync(join(worldDir, 'wechat-outbox.sqlite')), qq = next.qq ?? qqEnabled === true;
       save({ ...rest, wechatEnabled: wechat, ...(qq ? { qqEnabled: true } : {}) });
     },
@@ -129,10 +146,36 @@ export function createWorldSwitch(worldDir: string, configuredScope: MemoryArchi
     },
   };
 }
+/** 世界设置的公开形状，由 createWorldSwitch 的返回值推导。 */
 export type WorldSwitch = ReturnType<typeof createWorldSwitch>;
+/**
+ * 记忆轮数是否合法。
+ * @param value world.json 里读出的任意值。
+ * @returns 是大于等于 1 的整数时才算；undefined、小数与 0 都不算。
+ */
 export const validTurns = (value: unknown): value is number => typeof value === 'number' && Number.isInteger(value) && value >= 1;
+/**
+ * 冷会话阈值（小时）是否合法。
+ * @param value world.json 里读出的任意值。
+ * @returns 1 到 MAX_COLD_HOURS 之间的整数才算；再大就没有实际意义了。
+ */
 export const validColdHours = (value: unknown): value is number => typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= MAX_COLD_HOURS;
+/**
+ * 工作区权限名是否可用：非空字符串即可。
+ * @param value world.json 或控制台传来的任意值。
+ * @returns 去掉空白后仍有内容才算。
+ */
 export const validWorkspacePermission = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
 
+/**
+ * 微信上下文条数是否在范围内。
+ * @param value world.json 里读出的任意值。
+ * @returns 1 到 MAX_WECHAT_CONTEXT 之间的整数才算。
+ */
 export const validWechatContext = (value: unknown): value is number => typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= MAX_WECHAT_CONTEXT;
+/**
+ * 微信私聊图片的等待秒数是否在范围内。
+ * @param value world.json 里读出的任意值。
+ * @returns 0 到 MAX_WECHAT_BUFFER_SECONDS 之间的数才算（0 表示不等）。
+ */
 export const validWechatBuffer = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= MAX_WECHAT_BUFFER_SECONDS;

@@ -22,7 +22,10 @@ const logJson = (log) => JSON.stringify({ log })
 
 test('a missing ledger passes the check and record creates the file', t => {
   const dir = setup(t)
-  assert.deepEqual(check({ type: 'share', target: 'BV1', cfg: CFG }), { ok: true, why: '可发（今天 0/3）' })
+  const ok = check({ type: 'share', target: 'BV1', cfg: CFG })
+  assert.equal(ok.ok, true)
+  assert.equal(ok.why, '可以发')
+  assert.equal(ok.detail, '可发（今天 0/3）')
   assert.equal(record({ type: 'share', target: 'BV1', note: '测试', cfg: CFG }), true)
   const q = JSON.parse(readFileSync(join(dir, 'quota.json'), 'utf8'))
   assert.equal(q.log.length, 1)
@@ -35,14 +38,14 @@ test('the same video is refused within sameVideoDays', t => {
   const dir = setup(t, { 'quota.json': logJson([{ at: new Date().toISOString(), type: 'share', target: 'BV1', share: true }]) })
   const r = check({ type: 'share', target: 'BV1', cfg: CFG })
   assert.equal(r.ok, false)
-  assert.match(r.why, /已发过/)
+  assert.match(r.why, /已经发过了/)
 })
 
 test('shareDaily cap blocks the next share today', t => {
   const dir = setup(t, { 'quota.json': logJson([0, 1, 2].map(i => ({ at: new Date().toISOString(), type: 'share', target: `BV${i}`, share: true }))) })
   const r = check({ type: 'share', target: 'BV9', cfg: CFG })
   assert.equal(r.ok, false)
-  assert.match(r.why, /3\/3/)
+  assert.match(r.detail, /3\/3/)
 })
 
 test('record does not double-log the same target', t => {
@@ -74,17 +77,17 @@ test('the UI shareDailyMax wins over quota.shareDaily when it is set', t => {
   const cfg = { quota: { sameVideoDays: 7 }, bilibili: { dynamic: { shareDailyMax: 10 } } }
   const r = check({ type: 'share', target: 'BV9', cfg })
   assert.equal(r.ok, true, '第 5 条在 UI 设 10 时仍可发')
-  assert.match(r.why, /4\/10/)
+  assert.match(r.detail, /4\/10/)
 })
 
 test('with no shareDailyMax it falls back to quota.shareDaily', t => {
   setup(t, { 'quota.json': today(2) })
   const r = check({ type: 'share', target: 'BV9', cfg: { quota: { shareDaily: 2, sameVideoDays: 7 } } })
   assert.equal(r.ok, false)
-  assert.match(r.why, /2\/2/)
+  assert.match(r.detail, /2\/2/)
 
   // shareDailyMax 显式写 0 = 不启用 UI 值，继续回落 quota.shareDaily（5）
   const fallback = check({ type: 'share', target: 'BV8', cfg: { quota: { shareDaily: 5, sameVideoDays: 7 }, bilibili: { dynamic: { shareDailyMax: 0 } } } })
   assert.equal(fallback.ok, true)
-  assert.match(fallback.why, /2\/5/)
+  assert.match(fallback.detail, /2\/5/)
 })

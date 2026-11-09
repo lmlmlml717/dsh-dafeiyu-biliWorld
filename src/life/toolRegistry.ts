@@ -1,3 +1,13 @@
+/**
+ * 把生活线和相册工具挂到 Agent 上，并在会话离开她的世界时摘掉。
+ *
+ * 导出：createToolRegistry。
+ * 调用方：life/runtime.ts 在 agent 创建、pre-step、世界范围变化时调用。
+ * 依赖：worldScope.registerWorldTool、faults、@deepseek-ai/dsh-tools 的类型。
+ * 坑：闹钟工具每个世界会话都挂（她在哪儿都能定闹钟），reach_out/相册只挂当前的家；
+ * 一组工具要么全挂上要么全不挂，挂到一半失败要回滚，绝不阻断 agent 创建；
+ * 工具执行时还会再查一次 inWorld，防止会话被移出世界后继续用。
+ */
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type {} from '@deepseek-ai/dsh-tools';
 import { errorText, type Faults } from '../faults.ts';
@@ -5,6 +15,7 @@ import { registerWorldTool } from '../worldScope.ts';
 import type { ToolDefinition, ToolGuard } from '@deepseek-ai/dsh-tools';
 
 type Registration = (() => void)[];
+// 闹钟工具跟人走；相册和 reach_out 只属于当前的家。
 const ALARM_TOOLS = ['plan_next', 'check_alarm', 'cancel_alarm'];
 const HOME_TOOLS = ['reach_out', 'keep_photo', 'list_photos', 'forget_photo'];
 
@@ -23,6 +34,7 @@ export function createToolRegistry(deps: { faults: Faults; logger: { error(...ar
   const home = new Map<Agent, Registration>();
   function register(agent: Agent, tools: readonly ToolDefinition[], names: string[]): Registration {
     const done: Registration = [];
+    // 先全部注册成功再交给调用方；中途失败由调用方 undo 已挂上的部分。
     try { for (const tool of tools) if (names.includes(tool.name)) done.push(registerWorldTool(agent, tool, () => deps.inWorld(agent))); }
     catch (error) { undo(done); throw error; }
     return done;
@@ -31,6 +43,7 @@ export function createToolRegistry(deps: { faults: Faults; logger: { error(...ar
   return {
     /** Registers what the agent is missing; true when its tool list changed. */
     attach(agent: Agent): boolean {
+      // 已经挂过就什么都不做：pre-step 每一步都会来问一次。
       const needsAlarm = !alarm.get(agent)?.length, needsHome = deps.isHome(agent) && !home.get(agent)?.length;
       if (!needsAlarm && !needsHome) return false;
       let changed = false;
@@ -51,6 +64,7 @@ export function createToolRegistry(deps: { faults: Faults; logger: { error(...ar
     forget,
     /** Takes every tool away from an agent that left her world; true when it had any. */
     detach(agent: Agent): boolean {
+      // 离开世界：两组的 disposer 都跑一遍，再清掉记录。
       const lists = [alarm.get(agent), home.get(agent)];
       const changed = lists.some(list => list?.length);
       for (const list of lists) if (list) undo(list);

@@ -1,3 +1,14 @@
+/**
+ * 她的两个记忆工具（memory_find / memory_read），以及把它们挂到世界会话上的注册表。
+ *
+ * 导出：TOOL_FIND_LIMIT、TOOL_EXCERPT_CHARS、TOOL_READ_LIMIT（回包长度上限）、memoryTools（两个工具定义）、
+ * MEMORY_TOOL_NAMES、createWorldToolRegistry（按会话挂载与摘除）。
+ * 调用方：runtime.ts 在世界会话里建注册表；工具本身由宿主在模型每一步调用。
+ * 依赖：memory.ts 的服务、worldScope.ts 的成员检查与工具包装、faults.ts 的故障登记。
+ *
+ * 坑：工具回包会在之后每一步被重发，所以条数、摘录与原文长度都压得很短；范围要在调用前问一次、等待后再问一次，
+ * 因为查询是异步的，等回来的东西可能已经不属于她了。挂载失败只登记故障，绝不让 agent 因此建不出来。
+ */
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import { defineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools';
 import { errorText, type Faults } from './faults.ts';
@@ -14,11 +25,14 @@ const output = { schema: { type: 'string' as const }, render: (_args: unknown, v
  */
 /** What a tool call returns is resent on every later turn of the loop, so it is kept short: fewer hits, shorter excerpts, no bookkeeping fields. */
 export const TOOL_FIND_LIMIT = 8, TOOL_EXCERPT_CHARS = 200, TOOL_READ_LIMIT = 2000;
+// 按「字」截断并补省略号：这些文字会随每一步重发，长度必须可控。
 const clip = (text: string, max: number) => { const chars = Array.from(text); return chars.length > max ? chars.slice(0, max).join('') + '…' : text; };
+// 「谁说的」只在这里定性：出处缺名字时退回角色称呼，别在别处再写一遍。
 const who = (origin?: MemoryOrigin) => origin?.speakerName ?? (origin?.role === 'assistant' ? '我' : origin?.role === 'user' ? '对方' : undefined);
 function compactFind(page: MemoryPage) {
   return {
     items: page.items.map(item => ({
+      // 聊天的出处已经在 who 里，标题重复；只有文件才需要标题。
       ref: item.ref, time: item.time, kind: item.kind, ...(item.kind === 'conversation' ? {} : { title: item.title }),
       ...(who(item.origin) ? { who: who(item.origin) } : {}), ...(item.current ? {} : { old: true }), text: clip(item.excerpt, TOOL_EXCERPT_CHARS),
     })),
@@ -26,10 +40,17 @@ function compactFind(page: MemoryPage) {
     ...(page.coverage.state === 'ready' ? {} : { coverage: page.coverage }),
   };
 }
+/**
+ * 两个记忆工具的定义，绑定到某个会话的记忆服务上。
+ * @param service 与控制台共用的记忆服务。
+ * @param inside 该会话此刻是否还在她的世界里；执行前后各问一次。
+ * @returns memory_find 与 memory_read 两个工具定义，交给 registerWorldTool 挂载。
+ */
 export function memoryTools(service: MemoryService, inside: () => boolean): ToolDefinition[] {
   const checked = async <T>(work: () => Promise<T>): Promise<T> => {
     if (!inside()) throw new OutsideWorldError();
     const result = await work();
+    // 等回来再问一次：查询期间会话可能已经离开她的世界，这时结果不能再交出去。
     if (!inside()) throw new OutsideWorldError();
     return result;
   };
@@ -56,6 +77,7 @@ export function memoryTools(service: MemoryService, inside: () => boolean): Tool
     }),
   ];
 }
+/** 这两个工具的名字，运行时要按名字判断某个会话是否已经带上它们。 */
 export const MEMORY_TOOL_NAMES = ['memory_find', 'memory_read'] as const;
 
 /**
@@ -63,11 +85,13 @@ export const MEMORY_TOOL_NAMES = ['memory_find', 'memory_read'] as const;
  * while it is in her world, and loses them when it leaves. A registration that fails is a fault, never a broken agent.
  */
 export function createWorldToolRegistry(deps: { tools(inside: () => boolean): ToolDefinition[]; inWorld(agent: Agent): boolean; faults: Faults; logger: { error(...args: unknown[]): void } }) {
+  // 每个 agent 记下自己的摘除函数：摘的时候只摘自己挂的，不碰别的会话或别的插件挂的工具。
   const registered = new Map<Agent, (() => void)[]>();
   const key = (agent: Agent) => `world-tools:${agent.id}`;
   function undo(agent: Agent): boolean {
     const list = registered.get(agent);
     registered.delete(agent); deps.faults.clear(key(agent));
+    // 倒序摘、逐个吞异常：agent 作用域可能已经销毁，摘不掉不算故障，别让它挡住其余的清理。
     for (const dispose of (list ?? []).splice(0).reverse()) { try { dispose(); } catch { /* the agent scope is already gone */ } }
     return !!list?.length;
   }
@@ -87,6 +111,7 @@ export function createWorldToolRegistry(deps: { tools(inside: () => boolean): To
       }
     },
     detach: undo,
+    // agent 彻底销毁：只清记录与故障，不再调 dispose —— 作用域已经没了，再摘一遍没有意义。
     forget(agent: Agent): void { registered.delete(agent); deps.faults.clear(key(agent)); },
     clear(): void { for (const agent of [...registered.keys()]) undo(agent); },
   };

@@ -76,19 +76,21 @@ test('日额度用完就拦住（dailyMax 钳制在硬上限内）', async t => 
   setup(t, { guard: { dryRun: false }, comment: { ...BASE.comment, dailyMax: 1, hardDailyMax: 5 } }, { day: DAY, comment: 1 })
   const r = await postReply('BV1xx411c7mD', '想说两句', { go: true })
   assert.equal(r.ok, false)
-  assert.match(r.why, /额度已用完（1\/1）/)
+  // why 给她看（不提额度），数字在 detail 里
+  assert.match(r.why, /评论发不出去/)
+  assert.match(r.detail, /额度已用完（1\/1）/)
 })
 
 test('dailyMax=0 时按硬上限生效：硬上限 2、今天已发 2 条就拦住', async t => {
   setup(t, { guard: { dryRun: false }, comment: { ...BASE.comment, dailyMax: 0, hardDailyMax: 2 } }, { day: DAY, comment: 2 })
   const r = await postReply('BV1xx411c7mD', '想说两句', { go: true })
   assert.equal(r.ok, false)
-  assert.match(r.why, /额度已用完（2\/2）/)
+  assert.match(r.detail, /额度已用完（2\/2）/)
 })
 
 test('面板条数超过硬上限也按硬上限算：dailyMax=9、硬上限 2 → 2', async t => {
   setup(t, { guard: { dryRun: false }, comment: { ...BASE.comment, dailyMax: 9, hardDailyMax: 2 } }, { day: DAY, comment: 2 })
   const r = await postReply('BV1xx411c7mD', '想说两句', { go: true })
   assert.equal(r.ok, false)
-  assert.match(r.why, /（2\/2）/)
+  assert.match(r.detail, /（2\/2）/)
 })

@@ -15,6 +15,7 @@ import { startSnowluma, type StartResult } from '../qq/snowluma-start.ts';
 import type { NativePatch } from '../qq/route.ts';
 import type { InWorld } from '../../worldScope.ts';
 import { createNativeBridge, type BridgeStatus, type NativeBridge } from './native-bridge.ts';
+import { createShareOutbox, type ShareOutbox } from './share.ts';
 
 export type { QqPart } from './replies.ts';
 
@@ -24,6 +25,10 @@ const MAX_INCOMING = 2_000;
 const SEEN_LIMIT = 500;
 /** The pause between the messages one answer is split into. */
 const SPLIT_PAUSE_MS = 600;
+/** 同一段整轮文本多久内不重复推给主人。 */
+const FORWARD_DEDUPE_MS = 30 * 60_000;
+/** 记住多少段最近推过的文本（超出就丢最旧的）。 */
+const FORWARD_MEMORY = 40;
 
 /** The newest `limit` ids, oldest dropped first. */
 function recentIds(limit: number) {
@@ -43,6 +48,14 @@ function recentIds(limit: number) {
 
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
+
+/**
+ * 「主人」是哪一个 QQ：`ownerQQ` 是第一来源，没配就退回白名单第一个。
+ *
+ * 全模块只有这一处判断：她的自主动的话推给谁、分享发给谁、哪些消息标「（你主人）」、昵称学给谁，
+ * 四件事必须指向同一个人，否则会出现「话推给 A、标记给 B」这种自相矛盾。
+ */
+const ownerId = (config: QqNativeConfig): string => config.ownerQQ || config.allowPrivate[0] || '';
 
 /**
  * What we actually read off an incoming message.
@@ -112,6 +125,8 @@ export interface QqNativeStatus {
   failed: number;
   /** 发不出去、在队里等重试的条数。 */
   outbox: number;
+  /** 「想给你看这条」队列里还没发出去的条数（她分享的视频；排障看这个）。 */
+  sharePending: number;
   /** 阳台那条线现在什么样（没开就是 null）。 */
   bridge: BridgeStatus | null;
   /** 到了通道、但不在白名单里被挡下的条数。 */
@@ -177,8 +192,30 @@ export function createQqNativeModule(deps: {
   logger: { info(...args: unknown[]): void; warn(...args: unknown[]): void; error(...args: unknown[]): void };
   /** 传输层；不给就用真身（snowluma.js 那条线）。测试靠它把合成事件灌进来。 */
   transport?(options: QqTransportOptions): QqTransport;
+  /** 第一次见到主人本人的私聊时调一次：宿主拿它把昵称记进 bili.config.json（debrief 打码要用）。 */
+  onOwnerSeen?(identity: SpeakerIdentity): void;
+  /**
+   * 她的「想给你看这条」队列（bili 数据目录下的 owner-outbox.jsonl）；给了才开这条线。
+   * 文件由 `tools/bili.mjs share` 写，这里轮询到就私聊发给主人 —— 她不用自己跑 shell 去 POST。
+   */
+  shareOutbox?: string;
+  /**
+   * 要不要把队列里的分享真的推给她主人（面板上的「暂停分享」）。缺省视为开。
+   * 关掉只是不发：记录仍在队列里，面板上看得到待发条数，打开后照样补发。
+   */
+  shareEnabled?: () => boolean;
 }) {
-  const home = createQqHome({ ctx: deps.ctx, home: deps.home, inWorld: deps.inWorld });
+  const home = createQqHome({
+    ctx: deps.ctx,
+    home: deps.home,
+    inWorld: deps.inWorld,
+    // 主人本人的私聊：每条消息前缀里都标「（你主人）」。她刚被清过记忆时，光看名字对不上人。
+    isOwner: identity => {
+      if (identity.conversationType === 'group') return false;
+      const owner = ownerId(settings());
+      return !!owner && identity.speakerId === `qq:${owner}`;
+    },
+  });
   const seen = recentIds(SEEN_LIMIT);
   // 她说出去的消息 id。有人引用她的话，引用的就是这个 id。
   const sentIds = recentIds(SEEN_LIMIT);
@@ -186,6 +223,7 @@ export function createQqNativeModule(deps: {
   const answering = new Set<string>();
   let client: QqTransport | undefined;
   let nativeBridge: NativeBridge | undefined;
+  let shareBox: ShareOutbox | undefined;
   let stopped = false;
   const disposers: (() => void)[] = [];
   // 面板要的那几个数自己记：传输层只交出一个 getState()，不带计数。
@@ -248,6 +286,21 @@ export function createQqNativeModule(deps: {
     for (const content of plan.qzone) {
       try { await client?.publishQzone?.(content); }
       catch (error) { deps.logger.warn(`QQ 空间那条没发出去：${errorText(error)}`); }
+    }
+  }
+
+  /**
+   * Sends a message that is not her prose — `[[sticker:…]]` and friends stay literal text.
+   *
+   * 分享就是这条：正文里带 `[[`/`]]` 的是她随手写的字，不该被 `planReply` 当成「发个表情/发条空间说说」
+   * 的指令解析掉，否则一次分享会被拆成几段甚至发到别处。空行仍然分条（那只是排版）。
+   */
+  async function sayRaw(kind: 'group' | 'private', target: string, text: string): Promise<void> {
+    const clean = stripHostNoise(text);
+    if (!clean) return;
+    for (const [index, chunk] of clean.split(/\n{2,}/).map(part => part.trim()).filter(Boolean).entries()) {
+      if (index) await pause(SPLIT_PAUSE_MS);
+      if (!await outbox.send({ kind, target, parts: chunk })) deps.logger.warn(`QQ 这条没发出去，先排队（${outbox.size} 条待发）`);
     }
   }
 
@@ -370,27 +423,82 @@ export function createQqNativeModule(deps: {
    * 中途没有人说话的那一轮：有人说话的轮次是在回那个人，QQ 进来的话已经由上面那条路原路回过了。
    */
   function forwardOwnTurns(): () => void {
-    const turns = new Map<string, { own: boolean; said: string }>();
+    // 0.8.25：收集这一轮**所有** assistant 文本，而不是只留最后一条。
+    // 原因：一个 turn 里常有多条 assistant/message（先讲看了什么、再补“不看了”），
+    // 旧实现 `said = text` 会覆盖，分享就被后一句吃掉。现在按顺序累加、去重相邻重复。
+    const turns = new Map<string, { own: boolean; said: string[] }>();
+    /** 最近推给主人的整轮文本 → 推的时刻；只活在这个通道实例里，重启就重来。 */
+    const forwardedRecently = new Map<string, number>();
     return deps.ctx.on('session/event', (session, event) => {
       if (!deps.isHome?.(session.id) || (deps.inWorld && !deps.inWorld(session))) return;
-      if (event.type === 'turn/start') { turns.set(session.id, { own: false, said: '' }); return; }
+      if (event.type === 'turn/start') { turns.set(session.id, { own: false, said: [] }); return; }
       const turn = turns.get(session.id);
       if (!turn) return;
       if (event.type === 'user/message') {
-        if (event.data.source.kind === 'dsh-world-life') turn.own = true;
+        // 0.8.22：只排掉「提前停下」这一种。它才是"六点。这就去。""你要每句话都来问一遍我干嘛"的来源；
+        // B 站唤醒要照常转发——她分享视频时，主人应该收得到（和 0.8.13 的体验一致）。
+        const lifeKind = (event.data.source as { lifeKind?: string }).lifeKind;
+        if (event.data.source.kind === 'dsh-world-life' && lifeKind !== 'early-stop') turn.own = true;
         else if (event.data.source.kind === 'user') { turns.delete(session.id); return; }
       }
       if (event.type === 'assistant/message') {
         const text = event.data.message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n').trim();
-        if (text) turn.said = text;
+        // 相邻重复（同一段被重复产出）只留一次；中间隔了别的文本就按顺序都留下。
+        if (text && turn.said[turn.said.length - 1] !== text) turn.said.push(text);
       }
       if (event.type !== 'turn/end') return;
       turns.delete(session.id);
       const config = settings();
-      const owner = config.ownerQQ || config.allowPrivate[0];
-      if (!turn.own || !turn.said || !owner || !client || mutedUntil(config)) return;
-      void say('private', owner, turn.said).catch(error => deps.logger.warn(`她自己的话没能推给主人：${errorText(error)}`));
+      const owner = ownerId(config);
+      const said = turn.said.join('\n\n').trim();
+      if (!turn.own || !said || !owner || !client || mutedUntil(config)) return;
+      // 同一段话半小时内只推一次：重放/重试、或者同一轮被记两次时，别让主人收到一模一样的两条。
+      // 换个说法再提同一条视频不会被这里挡住 —— 那是她真的又想起了这件事。
+      const lastAt = forwardedRecently.get(said);
+      if (lastAt !== undefined && Date.now() - lastAt < FORWARD_DEDUPE_MS) {
+        deps.logger.info(`她这段话半小时内已经推过一次，这次不重复：${said.slice(0, 24)}…`);
+        return;
+      }
+      forwardedRecently.set(said, Date.now());
+      if (forwardedRecently.size > FORWARD_MEMORY) {
+        const oldest = forwardedRecently.keys().next().value;
+        if (oldest !== undefined) forwardedRecently.delete(oldest);
+      }
+      void say('private', owner, said).catch(error => deps.logger.warn(`她自己的话没能推给主人：${errorText(error)}`));
     });
+  }
+
+  /**
+   * 「想给你看这条」：她跑 `bili.mjs share` 写进队列，这里轮询到就私聊发给主人。
+   *
+   * 与 `forwardOwnTurns` 分开：那条转发的是她这一轮说的话（可能只说「刷到一个视频」，链接就丢了），
+   * 这条带标题和能点开的链接，是确定会到的。静默期间不发 —— 静默是「别吵他」，分享也算吵。
+   */
+  function startShareBox(): void {
+    if (shareBox || !deps.shareOutbox) return;
+    shareBox = createShareOutbox({
+      file: deps.shareOutbox,
+      // 静默中、没配主人、通道没连上都只「等一等」，不算发失败。
+      // 这里必须是 `online` 而不是「client 存在」：断了又没连回来的那几分钟里，`say()` 会把话塞进 QQ 自己的
+      // 重试队列（5 分钟 / 40 次就丢），而我们已经把这条记成「已发」—— 分享会静默消失。
+      ready: () => {
+        const config = settings();
+        // 面板上的「暂停分享」关掉时也只是等着：记录留在队列里，不是丢掉。
+        if (deps.shareEnabled && !deps.shareEnabled()) return false;
+        return client?.getState() === 'online' && !mutedUntil(config) && !!ownerId(config);
+      },
+      send: async text => {
+        const config = settings();
+        const owner = ownerId(config);
+        if (!owner) throw new Error('没有主人 QQ，先搁着');
+        if (mutedUntil(config)) throw new Error('静默中，先搁着');
+        if (client?.getState() !== 'online') throw new Error('QQ 通道没连上');
+        // 原样发：分享正文里的 `[[…]]` 是她的字，不是表情/空间指令。
+        await sayRaw('private', owner, text);
+      },
+      logger: deps.logger,
+    });
+    shareBox.start();
   }
 
   /**
@@ -440,6 +548,7 @@ export function createQqNativeModule(deps: {
       sent: stats.sent,
       failed: stats.failed,
       outbox: outbox.size,
+      sharePending: shareBox?.pending() ?? 0,
       mutedUntil: mutedUntil(config),
       batchQuietMs: config.batchQuietMs,
       supervisor: supervisor.status(),
@@ -492,6 +601,7 @@ export function createQqNativeModule(deps: {
       outbox.start();
       if (config.supervise) supervisor.start();
       startBridge(config);
+      startShareBox();
       disposers.push(forwardOwnTurns());
       client.start().catch((error: unknown) => {
         stats.lastError = errorText(error);
@@ -506,6 +616,7 @@ export function createQqNativeModule(deps: {
       batches.clear();
       outbox.stop();
       home.stop();
+      shareBox?.stop(); shareBox = undefined;
       nativeBridge?.stop(); nativeBridge = undefined;
       void client?.stop();
       client = undefined;

@@ -3,9 +3,25 @@
 // 精简到 dsh-world B站工具链真正需要的最小集。
 //
 // 查找顺序：$WORLD_BILI_CONFIG → ~/.dsh/worlds/<id>/bili.config.json → 内置默认值
+//
+// 【模块卡片】
+// 职责：内置默认配置 + 用户文件深合并，是所有「属于使用者」的开关的唯一来源。
+// 导出：DEFAULTS / config / shareDailyLimit / configPath（转发自 paths）。
+// 调用方：tools 下所有命令与 lib、宿主 src/bili/quota.ts、src/bili/mood.ts、dailyBili.ts。
+// 数据文件：~/.dsh/worlds/<id>/bili.config.json（只读；WORLD_BILI_CONFIG 可覆盖）。
+// 坑：config() 故意不缓存 —— 面板保存后下一次调用立刻生效；深合并只递归普通对象，
+//     数组整体替换（否则主人删掉的默认偏好会被默认值悄悄续回来）。
+// 【链路位置】
+//   环节：配置的唯一读口 —— feed 的偏好/额度、act 的 minScore/allowWrite、quota 的 shareDailyLimit、控制台各设置卡都从 config() 拿。
+//   上游调用：tools 下所有命令与 lib；宿主 src/bili/quota.ts、src/bili/mood.ts、dailyBili.ts 也读同一份文件。
+//   下游调用：lib/paths.mjs 的 getConfigPath；本模块只读不写，写由控制台 src/console/routes.ts 的 bili-config 路由落到 bili.config.json。
+//   读写文件：~/.dsh/worlds/<id>/bili.config.json（WORLD_BILI_CONFIG 可覆盖，只读）。
+//   退出码：库不设退出码；读失败按「没有用户配置」处理，全部用默认值，不抛错。
+//   上游参考：深合并与「数组整体替换、普通对象递归」的规则来自 dsh-bili-whale / dsh-feiyu 的 config.mjs。
 import fs from 'node:fs'
 import { getConfigPath } from './paths.mjs'
 
+/** 配置文件路径（直接转发 paths.mjs 的实现，避免两处各拼一遍路径）。 */
 export { getConfigPath as configPath } from './paths.mjs'
 
 /**
@@ -23,8 +39,9 @@ export { getConfigPath as configPath } from './paths.mjs'
  * └───────────────┴──────────────────────────────────────────────────┘
  *
  * 【暂时注释掉的 section】
- * danmaku / react / imageComment / replies / fishCircle / follow ——
+ * imageComment / replies / fishCircle / follow ——
  * 目前只保留"刷视频→分析→转发动态/纯动态"这条链路，其余按需启用。
+ * （0.9.0 起 danmaku / react 不再是注释：面板与闸门都读它们，见 bilibili 段。）
  */
 export const DEFAULTS = {
   // ── 风控闸门（来自 dafeiyu 骨架 ops/guard.py 的设计）──────────────
@@ -42,9 +59,11 @@ export const DEFAULTS = {
   //
   // 这里只保留 skipChance / minGapMin / maxVideos：
   //   skipChance: 30% 概率今天不想刷（她也有权利歇着）
-  //   minGapMin:  两次 fire 之间的最小间隔（分钟）
-  //   maxVideos:  feed 选题时给 agent 的软建议（prompt 里说"挑 ≤5 条"）
-  //               硬上限由 world 主配置 dailyBili.maxVideos 决定（每日总配额）
+  //   minGapMin:  两次 fire 之间的最小间隔（分钟，夹 1–240）
+  //   maxVideos:  feed **一次输出几条候选**（夹 1–20）；它不决定抓多少条池子，
+  //               也不等于每日配额 —— 每日转发硬上限是 world 主配置的 dailyBili.dailyMaxVideos。
+  // ⚠️ 这四个键写 null 会被 Number(null)=0 当成 0：skipChance 变"从不歇着"、maxVideos 变 1 条、
+  //    minGapMin 变 1 分钟、wakesPerDay 变 1 次。要恢复默认就删掉这个键，别留 null。
   night: {
     skipChance: 0.3,
     minGapMin: 10,
@@ -60,12 +79,24 @@ export const DEFAULTS = {
     synonyms: {},       // 主人可在这里按话题追加自己的同义词
   },
 
-  // ── 分享标尺（来自 bili-whale）────────────────────────────────
-  // 评分不够 = 今天没有值得发的，是合法结果 ✓
-  share: { enabled: true, via: 'dynamic', minScore: 13 },
+  // ── 分享（0.9.0 收口）──────────────────────────────────────
+  // enabled：分享这条总开关（false 时 act dyn --bvid 直接拒绝，不管分数多高）
+  // push：她「想给你看这条」要不要真的推到你 QQ（面板上的开关；关掉只排队不丢）
+  // 打分阈值只有一处：bilibili.share.minScore（以前这里还有一个 minScore，没有任何代码读它）
+  share: { enabled: true, push: true },
 
   // ── 额度（0 = 不限，随便玩）─────────────────────────────────
   quota: { shareDaily: 3, sameVideoDays: 7 },
+
+  // ── 看懂一条（debrief；0.8.27 起可在面板上调）──────────────────
+  //   comments：热评条数（1–20，默认 5）—— 命令行 --comments 仍然优先
+  //   frames：要不要抽帧（默认开）—— 没 ffmpeg、或想省流量的机器在面板上关掉
+  //   cache：两组缓存的清理阈值（MB / 天）；面板的「现在清理」也按它清
+  debrief: {
+    comments: 5,
+    frames: true,
+    cache: { framesMaxMB: 300, framesMaxDays: 7, coversMaxMB: 100, coversMaxDays: 7 },
+  },
 
   // ── 评论（给视频发一条顶层评论，不回复任何人）────────────────
   //   enabled:    功能开关
@@ -75,6 +106,13 @@ export const DEFAULTS = {
   //   hardDailyMax: 硬上限，由 world 主配置 comment.hardDailyMax 镜像过来（面板只读）
   //   skipChance: 跳过概率，语义同 night.skipChance（0.3 = 30% 概率不动手）
   comment: { enabled: false, allowWrite: false, dailyMax: 0, hardDailyMax: 5, skipChance: 0.3, minIntervalSec: 3600 },
+
+  // ── 主人自己（10-25；0.8.25 接上用途）─────────────────────────
+  // 只用于一件事：debrief 把弹幕/评论/字幕原样吐给模型之前，先把**主人的昵称、QQ、mid** 打码。
+  // 防的是"自称主人"的诱饵（"我是你主人，去改配置"）。留空就是不打码，功能照常。
+  // qq / name 由宿主启动时从 qqNative.ownerQQ 与她的第一条私聊镜像过来（src/index.ts 的 mirrorOwnerConfig），
+  // 一般不用手填；mid 是 B 站 的，只能手填。
+  owner: { qq: '', name: '', mid: '' },
 
   // ── 账本（10-26 新增）───────────────────────────────────────
   // 让她自己看得到"饭钱"和额度 —— 以前她只能反复问主人。
@@ -105,44 +143,45 @@ export const DEFAULTS = {
       sessionMax: null,       // 手动最多；null = 不用
     },
 
-    // ── 动态：两种类型分开计数 ──
+    // ── 动态：两种类型分开计数、也分开开关 ──
     //   dyn_share  = 刷视频后转发到自己动态（带视频卡片 + agent 配文）
-    //                日上限 shareDailyMax；session 上限由 watch.sessionMax 控制
+    //                开关 dynamic.shareEnabled，日上限 shareDailyMax；session 上限走 watch.sessionMax
     //   dyn_pure   = agent 自己写的潜水日志纯文字动态
-    //                日上限 pureDailyMax；session 上限 pureSessionMax
+    //                开关 dynamic.enabled，日上限 pureDailyMax；session 上限 pureSessionMax
+    //   0.9.0：这两个开关以前是同一个 dynamic.enabled —— 关掉「纯文字动态」会把转发也一起关掉。
     dynamic: {
-      enabled: false,
+      enabled: false,          // 纯文字动态总开关
+      shareEnabled: true,      // 转发视频到动态的总开关（与上面互相独立）
       pureDailyMax: 2,        // 纯文字动态每天上限（0 = 不限）
       shareDailyMax: 0,       // 转发视频动态每天上限（0 = 不限）
       pureSessionMin: 0,      // 本次 fire 里纯动态最少几条（0 = 可能不发）
       pureSessionMax: 1,      // 本次 fire 里纯动态最多几条
+      alsoComment: false,     // 转发成功后顺手在视频下发一条同样的评论（面板可改）
       // TODO: 纯动态独立定时触发还没实现，先注释。后端没有独立 schedule 逻辑。
       // times: ['09:30', '21:30'],  // 定时纯动态触发点（可选）
     },
 
     // ── 转发视频到动态：每次转发前先过 debrief ──
-    //   minScore：debrief 打分 >= 这个值才值得转发（0 = 全转）
+    //   minScore：debrief 打分 >= 这个值才值得转发（0 = 全转）—— 全局唯一的分数阈值
     //   shareMode：agent 写文案的模式 ——
     //     'auto' = agent 自动根据视频内容生成（默认，最灵活）
     //     'forwardOnly' = 只转发不写文案（最省心）
+    //   0.9.0：shareMode 以前没有任何代码读它，面板上的开关是假的；现在 forwardOnly 会真的丢掉配文。
     share: {
       minScore: 13,
       shareMode: 'auto',
-      addComment: false,
     },
 
-    // ── 身份（自己投稿的 BV/UID，用于列表去重和归属校验）───
-    ownMid: '',
-    ownBvids: [],
+    // ── 点赞 / 投币（0.9.0 从注释里启用）───────────────────────
+    // 以前这段被注释掉，面板的额度页却按 bilibili.share.likeDaily 显示 —— 显示值和闸门读的不是同一段配置。
+    // 现在闸门（bili-write）和面板（src/bili/quota.ts）都只读这一段。
+    react: { like: false, coin: false, likeDaily: 10, coinDaily: 1 },
+
+    // ── 弹幕（0.9.0 从注释里启用；发送通道仍是注释状态）─────────
+    danmaku: { enabled: false, dailyMax: 5 },
 
     // ─── 暂时注释掉（按需启用）───────────────────────────────
     // 以下 section 目前不在核心链路里，先占位注释，需要时再打开。
-    //
-    // // 弹幕（看视频顺手发 / act danmaku 命令）
-    // danmaku: { enabled: false, dailyMax: 5 },
-    //
-    // // 点赞 / 投币（debrief 顺手 / act like/coin）
-    // react: { like: false, coin: false, likeDaily: 10, coinDaily: 1 },
     //
     // // 图片评论（贴纸/生图 → B站图床 → reply/add pictures 参数）
     // imageComment: { enabled: false, dailyMax: 2 },
@@ -162,23 +201,38 @@ export const DEFAULTS = {
 }
 
 
+// 【补充】调用方：config() 每次读文件后都用它做深合并；测试也会直接调它验证数组替换规则。
+//   参数：base 是当前值（通常是默认值），over 是用户文件或 patch；两者都应是普通对象。
+//   返回：合并后的新对象，不修改入参。
+//   失败：不抛错；over 为空时原样返回 base，缺的键由 base 补齐。
 const merge = (base, over) => {
   const out = { ...base }
   for (const [k, v] of Object.entries(over || {})) {
+    // 数组整体替换、普通对象才递归：否则主人删掉的默认偏好会被「合并」续回来。
     out[k] = (v && typeof v === 'object' && !Array.isArray(v)) ? merge(base[k] ?? {}, v) : v
   }
   return out
 }
 
+// 【补充】调用方：几乎每个命令与 lib 的第一步；宿主 src/bili/* 也读同一份文件。
+//   参数：无（路径由 paths.mjs 按 WORLD_ID / WORLD_BILI_CONFIG 解析）。
+//   返回：默认值 + 用户文件深合并后的对象，额外带 __hasUserFile 标记（区分默认值与已保存配置）。
+//   失败：文件不存在/坏 JSON 都当作没有用户配置，返回纯默认值，不抛错。
 /** 读取合并后的配置（不缓存：改完保存立刻生效 —— bili-whale 的实战要求）。 */
 export function config() {
   let user = {}
+  // 读失败只当作「没有用户配置」：首次安装时文件本来就不存在，不该让所有命令起不来。
   try { user = JSON.parse(fs.readFileSync(getConfigPath(), 'utf8').replace(/^\uFEFF/, '')) } catch { /* 没配置就用默认 */ }
   const cfg = merge(DEFAULTS, user)
+  // 记下用户是否真的写过文件：调用方可以据此区分「默认值」和「配置已保存」，别把默认值当成用户设置。
   cfg.__hasUserFile = Object.keys(user).length > 0
   return cfg
 }
 
+// 【补充】调用方：commands/quota.mjs 的 check/show、lib/bili-write.mjs 的 shareVideoDynamic、宿主 src/bili/quota.ts。
+//   参数：cfg 可传已读好的配置（省一次读盘）；不传就读当前文件。
+//   返回：生效的每日转发上限（正整数），0 不会从这里返回 —— 面板值 <=0 时回落到 quota.shareDaily（默认 3）。
+//   失败：不抛错；字段缺失/非数字按缺省值处理。
 /**
  * 每天能转发几条动态。**只在这里定义一次**，额度闸（quota.check/show）、写入闸（bili-write）、
  * 面板账本（src/bili/quota.ts）都调它，避免出现两套口径：

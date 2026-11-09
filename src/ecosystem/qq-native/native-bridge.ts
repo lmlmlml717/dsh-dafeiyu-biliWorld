@@ -78,6 +78,16 @@ interface Frame {
   from?: unknown;
 }
 
+/**
+ * 「阳台」：给这台机器上别的程序留的一条 WS 线。
+ *
+ * 与 QQ 通道完全分开 —— 它是外面递话进来，不是 QQ 消息；一条线一间屋子（会话键里带 `qq-bridge`）。
+ * 口令落在世界目录（`qq-bridge.json`），重启 DSH 对面那份配置不用改；`config().port` 为 0 就整块不开。
+ *
+ * @param deps 见下方各字段注释；`session` 决定这条线进哪间屋子，`inWorld` 决定她是否还在工作区里
+ * @returns `{ start, stop, status }`：start 起服务、stop 幂等、status 给面板与日志看
+ * @throws 不抛错；端口被占用等启动失败通过 `status().lastError` 与 `log` 报出来
+ */
 export function createNativeBridge(deps: {
   ctx: Context;
   /** 通道会话：一条线就是她的一间屋子，键里带着线名，和 QQ 那两条互不打扰。 */

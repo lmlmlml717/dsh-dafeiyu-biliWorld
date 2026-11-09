@@ -64,6 +64,10 @@ test('the channel header is not archived as words, in the current form or the on
     return extractConversationRecords({ ...event, data: freezeMessage({ ...event.data, source: { kind: 'user' as const, identity } }) }, scope)[0].content;
   };
   assert.equal(archived(identityPrefix(identity) + '在吗'), '在吗');
+  // 主人私聊那条多一个「（你主人）」标记：它也不能被当成她的话记进记忆。
+  assert.equal(archived(identityPrefix(identity, { owner: true }) + '在吗'), '在吗');
+  // 群聊永远不带这个标记（不然会变成「（你主人） 妈妈 说」，自相矛盾）。
+  assert.doesNotMatch(identityPrefix({ ...identity, conversationType: 'group' as const, speakerName: '妈妈' }, { owner: true }), /你主人/);
   // As 0.7.0 wrote it: the normalized identity, whose key order differs from the literal above.
   assert.equal(archived(`【消息来源 ${JSON.stringify(speakerIdentity(identity))}】\n在吗`), '在吗');
 });

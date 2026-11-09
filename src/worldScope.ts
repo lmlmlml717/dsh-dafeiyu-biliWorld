@@ -1,3 +1,13 @@
+/**
+ * 「她的世界」的边界工具：成员判定、越界错误、只在世界内可用的工具包装，以及提示变更后的重新装配。
+ *
+ * 导出：InWorld 类型、OutsideWorldError、admit、scopedTool、registerWorldTool、reassembleOnChange。
+ * 调用方：memoryTools.ts 与 runtime.ts 用它挂工具；生态渠道用它确认 agent 还在不在世界里。
+ * 依赖：cordis 的 Context、dsh-agent 与 dsh-tools 的类型、dsh-system-prompt 的装配钩子。
+ *
+ * 坑：会话随时可能离开工作区，所以每一处入口都要重新问一遍：注入前、等待后、工具执行时。`when` 抛错会被宿主
+ * 判成整个回合失败，所以成员关系读不到时一律按「不在」处理，把探测失败降级成这一次不挂工具。
+ */
 import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { Session } from '@deepseek-ai/dsh-session';
@@ -11,6 +21,7 @@ import type { ToolDefinition } from '@deepseek-ai/dsh-tools';
  */
 export type InWorld = (session: Session) => boolean;
 
+/** 会话已经不在她的世界里：拒绝注入、拒绝工具调用时抛的固定错误。 */
 export class OutsideWorldError extends Error {
   constructor() { super('会话不在世界工作区内'); this.name = 'OutsideWorldError'; }
 }
@@ -24,6 +35,7 @@ export function admit(inWorld: InWorld | undefined, agent: Agent): Agent {
 /** The tool, refusing to run once its agent has left her world; `left` lets the owner take it away. */
 export function scopedTool(tool: ToolDefinition, inside: () => boolean, left?: () => void): ToolDefinition {
   return { ...tool, execute: (args, exec) => {
+    // 每次执行前再问一次；已经离开就顺手通知拥有者摘掉，并把错误抛给宿主，而不是假装成功。
     if (!inside()) { left?.(); throw new OutsideWorldError(); }
     return tool.execute(args, exec);
   } };
@@ -52,5 +64,6 @@ export function registerWorldTool(agent: Agent, tool: ToolDefinition, inside: ()
  * system prompt is assembled; when `sync` changed something, the prompt is assembled again to include it.
  */
 export function reassembleOnChange(ctx: Context, sync: (agent: Agent) => boolean): () => void {
+  // sync 说变了就立刻重新装配：工具可见性在解析阶段就定了，晚一步这一轮就拿不到新目录。
   return ctx.on('system-prompt/assemble', (_assembly, context, next) => context.agent && sync(context.agent) ? context.agent.ctx.systemPrompt.assemble(context) : next());
 }

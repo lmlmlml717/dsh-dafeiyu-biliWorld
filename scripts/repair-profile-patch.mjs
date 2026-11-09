@@ -13,6 +13,12 @@
  *
  * 退出码：0 修好或本来就不用修；1 文件不存在/读不了。改之前会在同目录留一份 `.bak`。
  */
+// 【文件头】修 profile 的 cordis.patch.yml 里 0.8.0 / 0.8.1 写下的旧 `- insert:` 映射写法。
+// 参数：--profile（缺省 desktop）、--home（缺省 $DSH_HOME 或 ~/.dsh）、--id（缺省 dsh-world-bili）。
+// 读写：读 <home>/profiles/<profile>/cordis.patch.yml；需要修时先在同目录留 .bak 再改写。
+// 输出：修好 / 不用修 / 没修的中文说明。
+// 退出码：0 修好或本来就不用修；1 文件不存在、读不了或写完校验不过。
+// 坑：必须在 DSH 启动前跑 —— 旧写法会让宿主在解析配置时就抛错，插件根本没被加载，selfRegister 里的修复执行不到。
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { repairLegacyInsert } from '../lib/install/profilePatch.js';
@@ -24,10 +30,12 @@ function arg(name, fallback) {
 }
 
 const profile = arg('--profile', 'desktop');
+// 与宿主同样的解析顺序：先 DSH_HOME，再 ~/.dsh —— 别自己另发明一套默认位置。
 const home = arg('--home', process.env.DSH_HOME || join(homedir(), '.dsh'));
 const id = arg('--id', 'dsh-world-bili');
 const file = join(home, 'profiles', profile, 'cordis.patch.yml');
 
+// 三种结果里只有"没修成"算失败：unchanged 是"本来就不用修"，退出码给 0，脚本可以反复跑。
 const result = repairLegacyInsert(file, id);
 if (result.status === 'repaired') {
   console.log(`dsh-world-bili: 已把 ${file} 的旧写法改成列表（备份在 ${result.backup}）。现在可以重启 DSH。`);

@@ -10,6 +10,21 @@
 //   同时心情被每 tick 砍 4 分 clamp 到底 0 → 「不太想说话」。
 //   现在：① 饭点也封顶（hungerCap）② 非饭点按次衰减（默认 -6）③ 吃到饭直接归零
 //   ④ 心情不再随饥饿每 tick 掉，改成**跨天软回归**（回到 moodBase）。
+//
+// 【模块卡片】
+// 职责：情绪/饥饿状态机 —— 每次唤醒 tick 一次，会饿、会回落、跨天软回归，并把当下状态拼成提示语。
+// 导出：tickMood / fed / mood / stateBlock / distract。
+// 调用方：宿主 src/bili/mood.ts（mood/fed）、src/bili/dailyBili.ts（动态 import）。
+// 数据文件：<bili 根>/mood.json（value/hunger/updatedAt/day 一个对象）。
+// 坑：tick 是「每次推送前都跑」的，饭点增益必须封顶、非饭点必须按次衰减，
+//     否则一天十几次 tick 会把饥饿打满，整天的提示词都写着「饿」。
+// 【链路位置】
+//   环节：情绪/饥饿状态机，宿主每次唤醒 tick 一次，把【当下状态】拼进提示语；不在 feed→debrief→act 主链里。
+//   上游调用：宿主 src/bili/mood.ts（mood/fed）、src/bili/dailyBili.ts（动态 import tickMood/stateBlock/distract）、控制台的 bili-mood 路由。
+//   下游调用：lib/paths.mjs（mood.json）、lib/config.mjs（mood 段热读）；不联网。
+//   读写文件：<bili 根>/mood.json（value / hunger / updatedAt / day）。
+//   退出码：库不设退出码；读坏/写失败都吞掉，按默认情绪继续。
+//   上游参考：dafeiyu 骨架 brain/persona.py 的 tick_mood + state_block；10-27 的封顶与按次衰减沿用 dsh-feiyu 的修正。
 import fs from 'node:fs'
 import { dataPath } from './paths.mjs'
 import { config } from './config.mjs'
@@ -17,6 +32,7 @@ import { config } from './config.mjs'
 function moodFile() { return dataPath('mood.json') }
 
 /** 饭点：到点了坐不住（与 dafeiyu 一致：午饭 11-12 点、晚饭 17-18 点）。 */
+// 只按小时判断、不做到分钟级闹钟：提示语里写「快吃饭了」就够了，精确到分钟反而机械。
 const HUNGRY_HOURS = new Set([11, 12, 17, 18])
 
 /** 默认参数（config.mood 可覆盖）。 */
@@ -36,6 +52,7 @@ function opts() {
 }
 
 function readState() {
+  // 读不到就回到 62 分（默认基线）：宁可当「正常」，也别因为文件损坏让她一整天低落。
   try {
     const j = JSON.parse(fs.readFileSync(moodFile(), 'utf8'))
     return {
@@ -62,6 +79,10 @@ const dayKey = (d = new Date()) => d.toLocaleDateString('sv-SE')
  * ③ 饿过头（>60）心情 -hungryMoodPenalty ④ 6% 概率无理由波动 {-9,-4,+5,+8} ⑤ clamp 0-100
  * ⑥ 跨天：心情朝 moodBase 软回归（新的一天不背着昨天的低谷）
  */
+// 【补充】调用方：宿主 src/bili/dailyBili.ts 每次唤醒前调一次（推送一分钟摇一次，所以参数必须封顶）。
+//   参数：random 注入随机源（测试用，默认 Math.random）。返回：tick 后的 { value, hunger, updatedAt, day }。
+//   失败：不抛错；读不到 mood.json 从默认基线 62 开始，写盘失败只影响下一次 tick 的起点。
+// 【上游参考】tick_mood 的「饭点增益 + 非饭点衰减 + 6% 无理由波动」照 dafeiyu 骨架；跨天软回归是本仓库 10-27 的修正。
 export function tickMood(random = Math.random) {
   const o = opts()
   const st = readState()
@@ -69,6 +90,7 @@ export function tickMood(random = Math.random) {
   const hour = now.getHours()
   const today = dayKey(now)
   // 跨天软回归：只做一次（靠 day 字段判定），不随 tick 反复拉
+  // 若改成每次 tick 都拉，一天几十次会把当天的情绪轨迹抹平，等于没有情绪。
   if (st.day && st.day !== today) {
     st.value = Math.round((st.value + o.moodBase) / 2)
     st.hunger = Math.max(0, st.hunger - 20)
@@ -76,9 +98,11 @@ export function tickMood(random = Math.random) {
   st.day = today
   if (HUNGRY_HOURS.has(hour)) st.hunger = Math.min(o.hungerCap, st.hunger + o.mealGain)
   else st.hunger = Math.max(0, st.hunger - o.decayPerTick)
+  // 60 是「饿到影响情绪」的门槛，和 stateBlock 措辞分档共用同一个数。
   if (st.hunger > 60) st.value -= o.hungryMoodPenalty
   // 不饿的时候心情自己往回爬（旧版只有"往下掉"的路径 → 一旦被打到底就整天 0，永远[[困倦]]）
   else if (st.hunger <= 30 && st.value < o.moodBase) st.value += 2
+  // 6% 概率的无理由波动：模拟情绪的自然抖动；幅度有正有负，不让她只往下掉。
   if (random() < 0.06) st.value += [-9, -4, 5, 8][Math.floor(random() * 4)]
   st.value = Math.max(0, Math.min(100, st.value))
   st.updatedAt = new Date().toISOString()
@@ -86,6 +110,9 @@ export function tickMood(random = Math.random) {
   return st
 }
 
+// 【补充】调用方：宿主 src/bili/mood.ts 的喂饭入口、控制台 POST bili-mood 的 feed 分支。
+//   参数：level 目标饥饿度（会夹在 0–20，留一点余量给下一个饭点）。返回：写回后的状态对象。
+//   失败：不抛错；文件损坏时从默认状态起步。
 /**
  * 吃到饭 / 主人说了他吃了 → 饥饿直接掉下来（10-27）。
  * 这是"连问十次吃没吃饭"的止血点：他答过一次，她就该真的不饿了。
@@ -93,16 +120,25 @@ export function tickMood(random = Math.random) {
 export function fed(level = 20) {
   const st = readState()
   const o = opts()
+  // 上限 20：吃饱也不归到绝对 0，留一点余量给下一个饭点自然回升。
   st.hunger = Math.max(0, Math.min(Number(level) || 0, 20))
   // 吃到东西本来就该心情好一点（不许一路 0 到底）
   st.value = Math.min(100, st.value + 8)
   st.updatedAt = new Date().toISOString()
   st.day = st.day || dayKey()
   writeState(st)
+  // o 目前没用到；保留 opts() 调用是为了让 fed 与 tickMood 吃同一份参数来源，后续要用直接取。
   void o
   return st
 }
 
+// 【补充】调用方：控制台 GET bili-mood（src/bili/mood.ts）与测试；只读，不推进状态。
+//   参数：无。返回：{ value, hunger, updatedAt, day }，文件缺失/损坏时返回默认值。
+//   失败：不抛错，也不写文件。
+/**
+ * 读当前情绪状态（不 tick、不写文件）。
+ * @returns {{value:number, hunger:number, updatedAt:string|null, day:string}} 文件缺失/损坏时返回默认值。
+ */
 export function mood() { return readState() }
 
 /** 时段 phase —— 同一句话在 7 点和 2 点必须不一样（dafeiyu 的核心设计）。 */
@@ -128,26 +164,33 @@ const PLATFORM_STATE = {
   douyin: '抖音评论区（一句话接住梗就够）',
 }
 
+// 【补充】调用方：宿主 prompt 拼装（dailyBili.ts 的 extraBlocks.stateBlock）。
+//   参数：turnsToday 今天聊了几轮/几句；platform 平台名；isGroup 是否群聊。
+//   返回：多行字符串，以「【当下状态】」开头；饥饿措辞按 60 / 75 两档分。
+//   失败：不抛错；读不到状态时用默认值，平台名未知时原样显示。
 export function stateBlock(turnsToday = 0, platform = 'bilibili', isGroup = false) {
   const now = new Date()
   const m = readState()
-  const style = m.value < 30 ? '不太想说话，句子短一点'
+  // 状态只给感觉、不给数字：她看到「情绪 62/100」就会把分数说给主人听（0.8.15）。
+  const style = m.value < 30 ? '有点提不起劲，句子短一点'
     : m.value > 75 ? '挺高兴，可以主动闹一点'
-    : '正常，按平时说话'
+    : '还行，按平时说话'
   // 饥饿措辞分档（10-27）：旧版 >60 就写"满脑子都是吃的"，一整天挂在提示词里 → 她开口就是饿。
   // 现在 75 以上才算"很饿"，60-75 只是"有点饿"，而且明确"别追着问主人吃了没"。
-  const hunger = m.hunger > 75 ? `很饿（${Math.round(m.hunger)}/100）。`
-    : m.hunger > 60 ? `有点饿（${Math.round(m.hunger)}/100），可以提一句吃的，但别追着问主人吃了没。`
+  const hunger = m.hunger > 75 ? '很饿。'
+    : m.hunger > 60 ? '有点饿，可以提一句吃的，但别追着问主人吃了没。'
     : ''
   // 群聊必须**明说**在群里（10-26）：原来写"QQ（私聊或群聊，按上下文判断）"，
   // 等于让她自己猜，猜错就把群友当主人。轮数同理 —— 群里的 34 条不是"跟他聊了 34 轮"。
   const platformText = isGroup ? 'QQ 群（群里好几个人在，说话的是群友，不是只有主人）'
     : (PLATFORM_STATE[platform] || platform)
-  const turnLine = isGroup ? `这个群今天说了 ${turnsToday} 条。`
-    : `今天已经聊了 ${turnsToday} 轮。${turnsToday > 40 ? '有点累了，敷衍一点。' : ''}`
+  // 轮数只作为累了的信号，不写具体条数 —— 数字会被她当成台词念出来。
+  const turnLine = isGroup
+    ? (turnsToday > 20 ? '这个群今天没少聊，累了就少说两句。' : '')
+    : (turnsToday > 40 ? '今天聊得有点多，有点累了，敷衍一点。' : '')
   const lines = [
     `现在是 ${now.toLocaleString('sv-SE', { hour12: false })}（${phaseText(now)}）。`,
-    `情绪 ${Math.round(m.value)}/100：${style}`,
+    `这会儿${style}。`,
     hunger,
     turnLine,
     `当前平台：${platformText}。`,
@@ -160,6 +203,9 @@ export function stateBlock(turnsToday = 0, platform = 'bilibili', isGroup = fals
  * ⚠️ 10-27：原来三条**全是吃的**，等于每天几十次给她"想想吃的"的心理暗示，
  * 跟"连问吃没吃饭"是一条绳上的。现在只有三分之一跟吃有关，其余是别的生活小事。
  */
+// 【补充】调用方：宿主 dailyBili.ts 拼 prompt 时调一次；返回空串表示这次不走神（大多数时候）。
+//   参数：random 注入随机源（测试用）。返回：以换行开头的句子，或空串。
+//   失败：不抛错。
 export function distract(random = Math.random) {
   if (random() >= 0.08) return ''
   const lines = [

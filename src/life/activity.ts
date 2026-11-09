@@ -1,7 +1,18 @@
+/**
+ * 把她做过的事变成人话：把工具调用压成一行摘要，并给闹钟摘一句「这段时间最后动的是什么」。
+ *
+ * 导出：collectPaths、summarizeCall、summarizeSince；没有状态，全是纯函数。
+ * 调用方：journal 记活动时用 summarizeCall，runtime 在闹钟里用 summarizeSince。
+ * 依赖：node:path 与 types.ts 的 ActivityRecord。
+ * 坑：路径判断是字面量比较，不解析软链接、`~` 和 `%VAR%`；shell 命令一律算「房间外」，
+ * 因为没法可靠界定它到底动了哪里。
+ */
 import { isAbsolute, relative, resolve } from 'node:path';
 import type { ActivityRecord } from './types.ts';
 
+// 这些工具名按命令行处理：参数里的 command 才是给人看的内容。
 const shells = new Set(['pwsh', 'bash', 'powershell', 'shell']);
+// 这些键（任意深度）下面挂的字符串按路径看，用来判断有没有动到房间工作区之外。
 const pathKeys = new Set(['path', 'file_path', 'filePath', 'paths', 'cwd', 'directory', 'dir', 'target', 'source', 'destination', 'root', 'folder']);
 const clip = (text: string) => Array.from(text.replace(/\s+/g, ' ').trim()).slice(0, 160).join('');
 
@@ -79,6 +90,7 @@ export function summarizeSince(records: readonly ActivityRecord[], sinceIso: str
   });
   if (!mine.length) return '这段时间我没动过手。';
   const tools = [...new Set(mine.map(record => record.tool))];
+  // 最多点三种工具，剩下的只报数量，免得这句话本身被工具名撑得太长。
   const shown = tools.slice(0, 3).join('、') + (tools.length > 3 ? ` 等 ${tools.length} 种` : '');
   const last = mine[mine.length - 1]!;
   const touched = Array.from(last.summary).slice(0, 40).join('').trim();

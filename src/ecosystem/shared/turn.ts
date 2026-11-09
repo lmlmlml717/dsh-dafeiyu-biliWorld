@@ -1,3 +1,12 @@
+/**
+ * 渠道请求的排队与「问一轮」：串行执行、限时取消，并从一轮事件里取出她说的话。
+ *
+ * 导出：createChannelQueue、askTurn。
+ * 调用方：qq-native/home.ts、native-bridge.ts，以及微信侧的渠道装配。
+ * 依赖：@deepseek-ai/dsh-agent、dsh-llm 的事件工具、life/alarmTimer 的 LifeTimers、worldScope。
+ * 坑：一轮可能早就开始了（闹钟、压缩、另一扇门的话），所以按顺序而不是按轮次号跟踪：
+ * 话进去之后的下一个 turn/end 才是它的结束；只有真正的用户消息会截断回答，其余注入都不算。
+ */
 import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import { lastAssistantStreamChunk, type UserMessage } from '@deepseek-ai/dsh-llm';
@@ -29,11 +38,13 @@ export function createChannelQueue(name: string, options: { limit: number; timeo
         cancel = () => reject(stoppedError());
         timer = timers.set(() => reject(new Error(`${name} home reply timed out`)), options.timeoutMs);
       });
+      // 这个 promise 可能没人 await，先吞掉 rejection，避免未处理的拒绝。
       cancelled.catch(() => {});
       cancellations.add(cancel);
       try { return await work(cancelled); }
       finally { cancellations.delete(cancel); timers.clear(timer); }
     }).finally(() => { queued--; });
+    // 队列本身不因一次失败停下：下一个请求接着排。
     pending = result.catch(() => {});
     return result;
   }
@@ -57,6 +68,7 @@ export function createChannelQueue(name: string, options: { limit: number; timeo
  * so the caller never sends half a message. The session's log is flushed before the answer is returned.
  */
 export async function askTurn(ctx: Context, agent: Agent, words: UserMessage, options: { name: string; inWorld?: InWorld | undefined; context?: UserMessage | undefined; cancelled?: Promise<never> | undefined }): Promise<string> {
+  // 没有取消信号时给一个永不 reject 的 promise，后面可以统一 race。
   const cancelled = options.cancelled ?? new Promise<never>(() => {});
   let admitted = false, failed = false, cut = false, reply = '';
   // Enough to tell, when it fails, which way it went.
@@ -85,10 +97,12 @@ export async function askTurn(ctx: Context, agent: Agent, words: UserMessage, op
       finish();
     }
   });
+  // 失败时把看到的事件数和最后一步带上，方便判断卡在哪。
   const trace = () => `事件=${seen} admitted=${admitted} failed=${failed} 最后=${last}`;
   try {
     admit(options.inWorld, agent);
     if (options.context) agent.inject(options.context);
+    // 用 followup 而不是 steer：她空闲时开新的一轮，忙时排到这一轮之后。
     agent.followup(words);
     await Promise.race([finished, cancelled]).catch((error: Error) => { throw new Error(`${error.message}（${trace()}）`, { cause: error }); });
     if (!admitted || failed || (cut && !reply.trim())) throw new Error(`${options.name} home request did not finish（${trace()}）`);

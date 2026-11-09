@@ -2,6 +2,9 @@
 // the panel's whitelist, @全体, her own words reaching the owner, and the SnowLuma watchdog.
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { SessionId } from '@deepseek-ai/dsh-session';
 import { hostFixture, textResponse } from './hostFixture.ts';
@@ -40,7 +43,7 @@ function wire(failures = 0) {
   return { factory, sent, stickers, posts, private: (message: unknown) => options?.onPrivateMessage?.(message), group: (message: unknown) => options?.onGroupMessage?.(message) };
 }
 
-async function channel(t: test.TestContext, reply: string | ((text: string) => string), over: Partial<QqNativeConfig> = {}, failures = 0) {
+async function channel(t: test.TestContext, reply: string | ((text: string) => string), over: Partial<QqNativeConfig> = {}, failures = 0, shareOutbox?: string, shareEnabled?: () => boolean) {
   const asked: string[] = [];
   const { ctx, cleanup } = await hostFixture(t, request => {
     const words = request.messages.filter(message => message.role === 'user' && ['user', 'dsh-world-life'].includes(message.source?.kind ?? '')).at(-1);
@@ -51,7 +54,11 @@ async function channel(t: test.TestContext, reply: string | ((text: string) => s
   const agent = (await ctx.agents.create({ sessionId: SessionId('qq-home'), agentOptions: { provider: 'test', model: 'test' } })).agent;
   const transport = wire(failures);
   let config = configOf(over);
-  const module = createQqNativeModule({ ctx, home: async () => agent, config: () => config, logger: quiet, transport: transport.factory, isHome: id => id === agent.id });
+  const module = createQqNativeModule({
+    ctx, home: async () => agent, config: () => config, logger: quiet, transport: transport.factory, isHome: id => id === agent.id,
+    ...(shareOutbox ? { shareOutbox } : {}),
+    ...(shareEnabled ? { shareEnabled } : {}),
+  });
   module.start(); cleanup.push(module.stop);
   return { ctx, agent, transport, module, asked, set: (next: Partial<QqNativeConfig>) => { config = { ...config, ...next }; } };
 }
@@ -106,11 +113,12 @@ test('a send that fails waits in the outbox and goes out later, or is given up o
   outbox.start();
   assert.equal(await outbox.send('later'), false);
   assert.equal(outbox.size, 1);
-  await settle(50);
+  // 全量测试并行跑时定时器会被挤，等够几轮（intervalMs=10，这里给到 200ms）才不 flaky。
+  await settle(200);
   assert.deepEqual(delivered, ['later']);
   failing = 99;
   await outbox.send('never');
-  await settle(80);
+  await settle(400);
   assert.deepEqual(dropped, ['never']);
   assert.equal(outbox.size, 0);
   outbox.stop();
@@ -124,7 +132,8 @@ test('an answer goes out paragraph by paragraph, with its sticker and post, and 
   assert.deepEqual(qq.transport.posts, ['出门了']);
   assert.deepEqual(qq.transport.sent.map(item => item.parts), ['我去看看'], 'the first paragraph failed and is waiting');
   assert.equal(qq.module.status().outbox, 1);
-  await settle(3_500);
+  // 3 秒的重试定时器在全量并发跑时会被挤晚，轮询等它（最多 6 秒），别用固定 sleep。
+  for (let i = 0; i < 60 && qq.transport.sent.length < 2; i++) await settle(100);
   assert.deepEqual(qq.transport.sent.map(item => item.parts), ['我去看看', '好的']);
   assert.equal(qq.module.status().outbox, 0);
 });
@@ -181,8 +190,74 @@ test('what she says in a turn of her own at home also reaches the owner, and not
   assert.equal(qq.transport.sent.length, 2, 'only her home');
 });
 
-test('the watchdog starts SnowLuma when its port is closed and says why when it cannot', async () => {
-  let alive = false, launches = 0;
+test('提前停下不推给主人，B 站唤醒和闹钟照旧', async t => {
+  const qq = await channel(t, text => text.includes('这一轮就停了') ? '六点。这就去。' : text.includes('B 站到点了') ? '刷到一个视频，挺有意思' : '起来了', { ownerQQ: '100' });
+  qq.agent.followup(createUserMessage({ source: { kind: 'dsh-world-life', lifeKind: 'early-stop' }, content: [{ type: 'text', text: '【我的时间】这一轮就停了' }] }));
+  await qq.agent.whenIdle(); await settle(600);
+  assert.equal(qq.transport.sent.length, 0, '提前停下的问话不该转到主人');
+  qq.agent.followup(createUserMessage({ source: { kind: 'dsh-world-life', lifeKind: 'bili-wake' }, content: [{ type: 'text', text: 'B 站到点了' }] }));
+  await qq.agent.whenIdle(); await settle(900);
+  assert.equal(qq.transport.sent.length, 1, 'B 站唤醒里她的分享要推给主人');
+  qq.agent.followup(createUserMessage({ source: { kind: 'dsh-world-life' }, content: [{ type: 'text', text: '【我的时间】闹钟响了' }] }));
+  await qq.agent.whenIdle(); await settle(900);
+  assert.equal(qq.transport.sent.length, 2, '闹钟到点的自述仍然推给主人');
+});
+
+test('主人本人的私聊，每条消息前缀都标「（你主人）」；别人不标', async t => {
+  // 她记忆被清过之后，只看到名字「伙伴」对不上人，回的是「我认识的人里没有一个这么说话的」。
+  // 所以这一条要机械地写在她读到的每一句上，不靠她自己推。
+  const qq = await channel(t, '在', { ownerQQ: '100' });
+  qq.transport.private(incoming({ userId: '100', messageId: '1' }));
+  await settle(600);
+  assert.match(qq.asked[0]!, /^【QQ「[^」]*」（你主人），chatId 100】/);
+
+  const other = await channel(t, '在', { ownerQQ: '100', allowPrivate: ['100', '777'] });
+  other.transport.private(incoming({ userId: '777', messageId: '2' }));
+  await settle(600);
+  assert.doesNotMatch(other.asked[0]!, /（你主人）/);
+});
+
+test('同一段话半小时内只推一次：重放或重试不该让主人收到两条一样的', async t => {
+  const qq = await channel(t, '刷到一个视频，笑死', { ownerQQ: '100' });
+  const life = () => createUserMessage({ source: { kind: 'dsh-world-life' }, content: [{ type: 'text', text: '【我的时间】闹钟响了' }] });
+  qq.agent.followup(life()); await qq.agent.whenIdle(); await settle(600);
+  assert.equal(qq.transport.sent.length, 1);
+  qq.agent.followup(life()); await qq.agent.whenIdle(); await settle(600);
+  assert.equal(qq.transport.sent.length, 1, '一模一样的一段不再推第二遍');
+});
+
+test('分享正文里的 [[sticker:…]] / [[qzone:…]] 是她的字，不当成指令', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'qq-share-mark-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, 'owner-outbox.jsonl');
+  writeFileSync(file, JSON.stringify({ id: 'm1', bvid: 'BV1xx411c7mD', title: '烤鸡', say: '笑死 [[sticker:开心]] [[qzone:出门了]]' }) + '\n');
+  const qq = await channel(t, '嗯', { ownerQQ: '100' }, 0, file);
+  await settle(800);
+
+  assert.deepEqual(qq.transport.sent.map(item => item.parts), ['《烤鸡》\nBV1xx411c7mD\n笑死 [[sticker:开心]] [[qzone:出门了]]']);
+  assert.deepEqual(qq.transport.stickers, [], '不该被解析成收藏表情');
+  assert.deepEqual(qq.transport.posts, [], '也不该被解析成空间说说');
+  assert.equal(qq.module.status().sharePending, 0);
+});
+
+test('面板上暂停分享：不发出，但记录留在队列里；恢复后照样补发', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'qq-share-pause-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, 'owner-outbox.jsonl');
+  writeFileSync(file, JSON.stringify({ id: 'p1', bvid: 'BV1xx411c7mD', title: '烤鸡' }) + '\n');
+  let paused = true;
+  const qq = await channel(t, '嗯', { ownerQQ: '100' }, 0, file, () => !paused);
+  await settle(3_500);
+  assert.deepEqual(qq.transport.sent, [], '暂停中不该发出去');
+  assert.equal(qq.module.status().sharePending, 1, '记录还在队列里，不是丢了');
+
+  paused = false;
+  await settle(3_500);
+  assert.deepEqual(qq.transport.sent, [{ to: '100', parts: '《烤鸡》\nBV1xx411c7mD' }], '恢复后补发');
+  assert.equal(qq.module.status().sharePending, 0);
+});
+
+test('the watchdog starts SnowLuma when its port is closed and says why when it cannot', async () => {  let alive = false, launches = 0;
   const watchdog = createSnowlumaSupervisor({ homeDir: 'C:/SnowLuma', host: '127.0.0.1', port: 3003, intervalMs: 20, probe: async () => alive, launch: () => { launches++; return { started: true, how: 'spawn' }; }, log: () => {} });
   watchdog.start(); await settle(30);
   assert.ok(launches >= 1);
