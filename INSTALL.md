@@ -1,5 +1,7 @@
 # 安装 dsh-world-bili
 
+## 目前直接下载tgz包，复制路径安装就行
+
 > 这是**插件**的安装说明。配置项总表见 [docs-md/PARAMETERS.md](docs-md/PARAMETERS.md)（随包附带）；打包、分发、升级、卸载和排障见仓库里的 [docs-md/DISTRIBUTION.md](https://github.com/lmlmlml717/dsh-dafeiyu-biliWorld/blob/main/docs-md/DISTRIBUTION.md)。
 
 ## 前置
