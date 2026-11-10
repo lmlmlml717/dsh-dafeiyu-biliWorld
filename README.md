@@ -9,7 +9,7 @@
 <img width="350" height="350" alt="image" src="https://github.com/user-attachments/assets/767d0883-9993-44d5-ab08-fa2403db3015" />
 <img width="350" height="350" alt="image" src="https://github.com/user-attachments/assets/6dc2f239-c8bf-4463-8697-26c41d1cde59" />
 <img width="350" height="350" alt="image" src="https://github.com/user-attachments/assets/48763b43-8835-4cca-9ab4-0312184b4529" />
-[![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/wanglijie34/dsh-session-jump)
+
 
 
 ## 它能做什么
