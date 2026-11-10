@@ -1,6 +1,6 @@
 # 参数总表（B 站侧 + 世界）
 
-> 版本：0.9.4。**行号已用脚本逐个核对过**（改代码后请顺手更新本表）。
+> 版本：0.9.5。**行号已用脚本逐个核对过**（本次用脚本把 134 处 `file:line` 全部重跑一遍，改代码后请顺手更新本表）。
 > 「读它的地方」= 代码里真正读这个参数的位置；定义处另标。
 > 0.9.3/0.9.4 新增的两件事见 §1.1：`reach_out` 现在有一条内置的 QQ 私聊出口；自查（提前停下）默认停用，每日回顾保留。
 
@@ -25,7 +25,7 @@
 | 键 | 默认 | 功能 | 读它的地方 |
 |---|---|---|---|
 | `worldId` | `default` | 世界目录名，同时写进 `WORLD_ID` | `src/index.ts:269` |
-| `agentPreset` | `standard` | 家/群会话用的 agent 预设 | `src/index.ts:436` |
+| `agentPreset` | `standard` | 家/群会话用的 agent 预设 | `src/index.ts:445` |
 | `timeZone` | 系统时区 | 所有本地时间与日切的唯一口径 | `src/timeContext.ts:12` |
 | `companionName` / `partnerName` | 空 | 提示词里「我」「你」的名字（人格里的名字优先） | `src/worldPrompt.ts:34` |
 | `archiveScope` | `workspace` | 记忆归档范围，改完重启 | `src/archiveSelection.ts` |
@@ -37,14 +37,14 @@
 | `outlets` | `[]` | 她的话推给外部程序（POST），`kinds` 选 reply/busy/reach；`reach` 是 `reach_out` 的第 2 条通道（第 1 条见 §1.1） | `src/ecosystem/shared/outlets.ts` |
 | `bridge` | `false` | 本机程序 `POST /dsh-world/bridge/say` 递话 | `src/ecosystem/bridge/bridge.ts` |
 | `wechat` | `false` | 微信通道 | `src/ecosystem/wechat/index.ts` |
-| `wechatAdapter.{python,config}` | 空 | 随微信模块启停的适配器（写了=允许它发消息） | `src/index.ts:441` |
+| `wechatAdapter.{python,config}` | 空 | 随微信模块启停的适配器（写了=允许它发消息） | `src/index.ts:450` |
 | `toast` / `toastAppId` | `true` / 空 | 系统通知；**只有 Windows 有**（`toastSupported()` 判平台），云服务器上这条通道根本不存在 | `src/life/notify.ts` |
 | `allowedHosts` | `[]` | 控制台额外允许的 Host（跨站一律 403） | `src/console/routes.ts` |
 | `qqNative.enabled` | `false` | QQ 原生通道总开关；打开时 `reach_out` 自动多一条 QQ 私聊出口（§1.1） | `src/index.ts:556` |
 | `qqNative.wsUrl` | `ws://127.0.0.1:3003` | SnowLuma 的 OneBot WS 地址 | `src/ecosystem/qq-native/snowluma.ts` |
 | `qqNative.accessToken` | 空 | OneBot token（空串不传） | 同上 |
 | `qqNative.allowPrivate` | `[]` | 能私聊她的 QQ；**第一个也是「主人」的兜底**（`ownerQQ` 没配时用它） | `qq-native/index.ts:329` |
-| `qqNative.ownerQQ` | 空 | **主人**：接收自主发言/分享、也是 `reach_out` 的收件人；空则退回 `allowPrivate[0]`（见 §1.1） | `src/bili/owner.ts:35` |
+| `qqNative.ownerQQ` | 空 | **主人**：接收自主发言/分享、也是 `reach_out` 的收件人；空则退回 `allowPrivate[0]`（见 §1.1） | `src/bili/owner.ts:41` |
 | `qqNative.allowGroups` | `[]` | 允许接话的群 | `qq-native/index.ts:326` |
 | `qqNative.autoReply` | `true` | 关掉＝收到不理（不花一轮） | `qq-native/index.ts:381` |
 | `qqNative.contextMessages` | `6` | 每轮带几条上文（夹 1–20） | `qq-native/index.ts:382` |
@@ -54,16 +54,16 @@
 | `qqNative.mutedUntil` | 空 | 只停嘴不停耳，到点自己醒（ISO）；也会挡住 `reach_out` 的 QQ 出口 | `qq-native/index.ts:391` |
 | `qqNative.snowlumaHome` | 空 | SnowLuma 目录（看门狗/拉起） | `src/ecosystem/qq/supervisor.ts` |
 | `qqNative.supervise` | `true` | 每 30 秒探端口，不通就拉起 SnowLuma | 同上 |
-| `qqNative.bindHomeSession` | `owner` | 谁和家会话共用入口（owner/all/none） | `src/index.ts:505` |
+| `qqNative.bindHomeSession` | `owner` | 谁和家会话共用入口（owner/all/none） | `src/index.ts:480` |
 | `qqNative.bridge.{port,token,title,contextMessages}` | `0/空/阳台/6` | 「阳台」WS 线；port 0 = 关 | `qq-native/native-bridge.ts` |
-| `dailyBili.enabled` | `false` | B 站自由模式总开关 | `src/index.ts:541` |
-| `dailyBili.dailyTime` | `20:00` | **仅兜底**：工具链加载/排期失败才用它 | `src/index.ts:554`、`src/bili/dailyBili.ts:362` |
-| `dailyBili.dailyMaxVideos` | `10` | 每日**转发**硬上限（并入 session 剩余量）；0 = 不限 | `src/index.ts:555` → `session-limit.resetSession` |
+| `dailyBili.enabled` | `false` | B 站自由模式总开关 | `src/index.ts:564` |
+| `dailyBili.dailyTime` | `20:00` | **仅兜底**：工具链加载/排期失败才用它 | `src/index.ts:577`、`src/bili/dailyBili.ts:371` |
+| `dailyBili.dailyMaxVideos` | `10` | 每日**转发**硬上限（并入 session 剩余量）；0 = 不限 | `src/index.ts:578` → `session-limit.resetSession` |
 | `dailyBili.napcatHttp` | `http://127.0.0.1:3000` | **已失效**：0.8.23 起没有读取点 | — |
-| `dailyBili.ownerQQ` | 空 | 次要来源，`qqNative.ownerQQ` 没配时才用 | `src/bili/owner.ts:35` |
+| `dailyBili.ownerQQ` | 空 | 次要来源，`qqNative.ownerQQ` 没配时才用 | `src/bili/owner.ts:41` |
 | `dailyBili.allowWrite` | `false` | 真发总开关，镜像成 `comment.allowWrite` | `src/index.ts:183` `mirrorCommentConfig` |
 | `comment.enabled` | `false` | 评论开关（镜像进 bili.config.json） | `src/index.ts:183` → `bili-write.mjs:365` |
-| `comment.hardDailyMax` | `5` | 评论每日硬上限，面板条数被它钳制；0 = 不限 | `bili-write.mjs:307` `commentCap`（调用 385） |
+| `comment.hardDailyMax` | `5` | 评论每日硬上限，面板条数被它钳制；0 = 不限 | `bili-write.mjs:308` `commentCap`（调用 385） |
 | `comment.minIntervalSec` | `3600` | 两条评论最小间隔（秒） | `bili-write.mjs:377` |
 
 ### 1.1 `reach_out`（她主动找主人）走哪几条通道
@@ -116,9 +116,9 @@
 | `guard.minGapSec` | `25` | 同一 chat 两条消息最小间隔（秒） | `guard.mjs:133` |
 | `guard.dupThreshold` | `0.6` | 3-gram Jaccard 复读阈值 | `guard.mjs:88` |
 | `guard.banned` | 4 个词 | 发送前删掉的黑名单词 | `guard.mjs:72` |
-| `night.skipChance` | `0.3` | 每次排期「今天不想刷」的概率（skip 也占一次名额） | `dailyBili.ts:83` |
-| `night.minGapMin` | `10` | 两次唤醒最小间隔（夹 1–240） | `dailyBili.ts:84` |
-| `night.maxVideos` | `5` | **feed 每次输出几条候选**（夹 20，不是池子大小） | `dailyBili.ts:86` → `feed.mjs:107` |
+| `night.skipChance` | `0.3` | 每次排期「今天不想刷」的概率（skip 也占一次名额） | `dailyBili.ts:87` |
+| `night.minGapMin` | `10` | 两次唤醒最小间隔（夹 1–240） | `dailyBili.ts:88` |
+| `night.maxVideos` | `5` | **feed 每次输出几条候选**（夹 20，不是池子大小） | `dailyBili.ts:90` → `feed.mjs:107` |
 | `night.windows` | 已废弃 | 窗口由 world 的 `wakeTime`→`reviewTime` 决定 | — |
 
 ### 3.2 口味与选题（feed）
@@ -135,7 +135,7 @@
 | 键 | 默认 | 功能 | 读它的地方 |
 |---|---|---|---|
 | `share.enabled` | `true` | 分享总开关；false 时转发直接拒绝 | `bili-write.mjs:451` |
-| `share.push` | `true` | 分享是否真推到 QQ；false = 只排队不丢 | `qq-native/index.ts:487` |
+| `share.push` | `true` | 分享是否真推到 QQ；false = 只排队不丢 | `qq-native/index.ts:526` |
 | `quota.shareDaily` | `3` | 转发日上限的回落值（`shareDailyMax` 为 0 时用） | `config.mjs:241` `shareDailyLimit` |
 | `quota.sameVideoDays` | `7` | 同一条视频几天内不再转（feed 也用它去重） | `quota.mjs:86`、`feed.mjs:181` |
 
@@ -230,9 +230,9 @@
 
 | 值 | 作用 | 位置 |
 |---|---|---|
-| 12 | 每天最多唤醒次数（硬上限） | `src/bili/dailyBili.ts:44` |
-| 1 / 240 | `minGapMin` 允许范围（分钟） | `dailyBili.ts:46,48` |
-| 5 | 专注剩 ≤5 分钟就跳过唤醒；**只对设了时限的专注生效**（`--min 0` / `until = 0` 永远不因此跳过，0.9.5） | `dailyBili.ts:225` |
+| 12 | 每天最多唤醒次数（硬上限） | `src/bili/dailyBili.ts:48` |
+| 1 / 240 | `minGapMin` 允许范围（分钟） | `dailyBili.ts:50,52` |
+| 5 | 专注剩 ≤5 分钟就跳过唤醒；**只对设了时限的专注生效**（`--min 0` / `until = 0` 永远不因此跳过，0.9.5） | `dailyBili.ts:229` |
 | 0.6 | 窗口每小时折算几次「看+转」 | `session-limit.mjs:104` |
 | [2,4] | 窗口算不出时的兜底名额 | `session-limit.mjs:107` |
 | 20 | feed 一次最多输出几条 | `feed.mjs:107` |

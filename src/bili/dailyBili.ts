@@ -14,10 +14,14 @@
 //
 //   src/bili/dailyBili.ts
 //
-// 导出：biliNightConfig / scheduleStillFits / biliPrompt 三个纯函数（可单测）与 createDailyBili 定时器工厂。
+// 导出：biliNightConfig / scheduleStillFits / shouldSkipWake / biliPrompt（纯函数，可单测）与
+//       createDailyBili 定时器工厂；MAX_WAKES_PER_DAY / MIN_GAP_MAX / SKIP_FOCUS_LEFT_MIN 等常量。
 // 被谁调用：index.ts 组装 DailyBiliOptions/Deps 后创建，并把 triggerNow/replan/busy 暴露给控制台。
 // 依赖：tools/lib 下的 night-plan/mood/focus/ledger/session-limit（动态 import，缺了会兜底）与 life/alarm.ts 的 nextLocalTime。
 // 坑：工具链没装好时静默降级到固定 dailyTime；plan.json 写失败只吞掉，重启后会按“今天没计划”重排。
+//     到点时若她**设了时限**的专注只剩 ≤ SKIP_FOCUS_LEFT_MIN 分钟，这次不投递（计划不兑现、不占次数），
+//     arm() 再重抽一个更晚的时刻；`--min 0`（until = 0）是「不设时限、靠她自己收工」，不算快收工——
+//     0.9.5 修过这里（以前把 remainMin=0 一律读成「还剩 0 分钟」，全天叫不醒她），改动前先看 shouldSkipWake。
 //
 // 【链路位置】B 站这条链路的宿主侧最上游：世界主配置（dailyBili.enabled / dailyTime / dailyMaxVideos /
 // dailyBili.allowWrite，以及 world.json 里的 wakeTime / reviewTime）由 index.ts 的 apply 读成
