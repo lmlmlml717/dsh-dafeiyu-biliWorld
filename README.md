@@ -2,7 +2,7 @@
 
 > 给 [DSH](https://github.com/deepseek-ai) DeepSeek Harness 的一个「世界 + B 站自动化」
 > 加了评论发布、动态发布、视频转发
-> 当前版本 **0.9.2** · 基于 **dsh-world**，融合 **dsh-feiyu** 的评论链路与 **dsh-bili-whale** 的 B 站工具链/调度设计。
+> 当前版本 **0.9.6** · 基于 **dsh-world**，融合 **dsh-feiyu** 的评论链路与 **dsh-bili-whale** 的 B 站工具链/调度设计。
 ## 太厉害啦DeepSeek大人  与[dsh-world](https://github.com/chenkezhen480/dsh-world)不兼容（大概，我也没试过，这篇md都是DeepSeek大人写的
 [![release](https://img.shields.io/github/v/release/lmlmlml717/dsh-dafeiyu-biliWorld)](https://github.com/lmlmlml717/dsh-dafeiyu-biliWorld/releases/latest)当前版本：0.2.2-rc.1 下载tgz包，复制路径安装即可
 ---
@@ -65,7 +65,7 @@
 
 ## 安装
 
-### 方式一：装打包好的 tgz（推荐给使用者）
+装 `npm pack` 出来的 tgz。**分发一律走 tgz**——`link:` 指向带 `node_modules/@deepseek-ai` 的源码目录时，旧核心包会被投影进 profile，宿主会报 `1 required plugin did not activate`。
 
 ```bash
 git clone https://github.com/lmlmlml717/dsh-dafeiyu-biliWorld.git
@@ -73,7 +73,7 @@ cd dsh-dafeiyu-biliWorld
 
 npm ci
 npm run build
-npm pack          # 产出 dsh-world-bili-0.9.2.tgz
+npm pack          # 产出 dsh-world-bili-<版本>.tgz
 ```
 
 退出 DSH，把 tgz 装进你的 profile：
@@ -84,17 +84,6 @@ node <DSH 自带 pnpm 的入口> add <tgz 的绝对路径> --ignore-scripts
 ```
 
 确认 profile 的 `package.json` 里 `dsh.profile.bundles` 含 `dsh-world-bili`，然后重启 DSH。也可以在 DSH 的插件面板里直接安装这个 tgz。
-
-### 方式二：开发时用 link
-
-```bash
-cd <DSH_HOME>/profiles/<你的 profile>
-node <DSH 自带 pnpm 的入口> add "link:<本仓库绝对路径>" --ignore-scripts
-```
-
-改 `src/**` 后要 `npm run build` 并重启 DSH；改 `client/index.js`、`tools/**` 一般刷新页面/下次命令即可。
-
-> ⚠️ 分发时不要把 `link:` 指向带 `@deepseek-ai` 依赖的源码目录，否则对方会报 `1 required plugin did not activate`。给对方发 tgz。
 
 ### 装 tgz 时会自动补一套 DSH 内部包
 
@@ -210,7 +199,7 @@ cordis.patch.yml     # bundle 自带的插入行
 
 ```bash
 npm run typecheck   # tsc --noEmit
-npm test            # 592 条 Node 回归测试
+npm test            # Node 回归测试（TS/JS，不联网）
 npm run build       # 清空 lib/ 后 tsc -p tsconfig.build.json
 npm run test:package
 ```

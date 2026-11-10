@@ -16,11 +16,11 @@
 
 ## 第一步：装进 profile
 
-### 用 tgz（推荐）
+### 用 tgz
 
 ```bash
 cd <DSH_HOME>/profiles/<你的 profile>
-node <DSH 自带 pnpm 的入口> add <dsh-world-bili-0.9.2.tgz 的绝对路径> --ignore-scripts
+node <DSH 自带 pnpm 的入口> add <dsh-world-bili-0.9.6.tgz 的绝对路径> --ignore-scripts
 ```
 
 pnpm 会顺带补一套 `@deepseek-ai/dsh-*` 到 `0.2.1-rc.5`，并报 `unmet peer @deepseek-ai/cordis`（装的是 4.1.0，那批包要 `~4.0.5`）。退出码仍是 0，属正常，不要为消警告去删 lock 或降级；细节见 README「装 tgz 时会自动补一套 DSH 内部包」。
@@ -33,22 +33,7 @@ pnpm 会顺带补一套 `@deepseek-ai/dsh-*` 到 `0.2.1-rc.5`，并报 `unmet pe
 
 **必须**手动加进 `bundles`（数组）。漏了这一步包是装上了，但插件不会加载，控制台里什么都看不到。**退出 DSH 再装/改，装完重启 DSH。**
 
-### 用源码 link（开发）
-
-```bash
-cd <DSH_HOME>/profiles/<你的 profile>
-node <DSH 自带 pnpm 的入口> add "link:<本仓库绝对路径>" --ignore-scripts
-```
-
-改 `src/**` 后：
-
-```bash
-npm run build     # 重新生成 lib/
-```
-
-再重启 DSH。只改 `client/index.js` 或 `tools/**` 时，通常刷新页面/下次命令即可。
-
-> 分发给别人时不要用 `link:` 指向带 `@deepseek-ai` 依赖的源码目录，否则会报 `1 required plugin did not activate`；发 tgz。
+> 不要用 `link:` 指向带 `@deepseek-ai` 依赖的源码目录：旧核心包会被投影进 profile，宿主会报 `1 required plugin did not activate`。分发一律发 tgz。
 
 ## 第二步：配置
 

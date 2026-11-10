@@ -22,14 +22,13 @@
 ```json
 {
   "dependencies": {
-    "dsh-world-bili": "file:D:/packages/dsh-world-bili-0.8.8.tgz"
+    "dsh-world-bili": "file:D:/packages/dsh-world-bili-<版本>.tgz"
   }
 }
 ```
 
 > 只有在你确认源码目录里**没有** `node_modules/@deepseek-ai`（或版本与宿主完全一致）时，
 > 才可以用 `"link:D:/plugins/dsh-world-bili"` 做本地开发；否则会把旧核心包投影进 profile。
-> 本地开发更方便的做法见 3.4。
 
 **② 加进 bundles**（同一个 `package.json`）：
 
@@ -139,8 +138,9 @@ npx -y pnpm@11.28.5 install --ignore-scripts
    node tools\bili.mjs feed --json # 应返回 ok:true 和若干视频
    ```
 
-   命令一览（0.8.8）：内置 `deps`（`selftest` 是别名）、`nav`；外部命令 `feed`、`debrief`、
-   `act`（动态/转发/评论/弹幕/点赞/投币）、`comment`（顶层评论，0.8.7+）、`quota`、`focus`。
+   命令一览（0.9.6）：内置 `deps`（`selftest` 是别名）、`nav`；外部命令 `feed`、`debrief`、
+   `act`（动态/转发/评论/弹幕/点赞/投币）、`comment`（顶层评论）、`quota`、`focus`、
+   `share`（把「标题 + BV + 一句」写进 `owner-outbox.jsonl`，由 QQ 通道发给主人）。
 
 4. 如果对方希望她在聊天里也能用 B 站工具，需要给她的 `world-prompt.md` 加一节说明
    （工具路径、可用子命令、什么时候可以直接用），否则她只会用通用网页工具，容易撞验证码。
@@ -218,7 +218,7 @@ npx -y pnpm@11.28.5 add @snowluma/sdk@2.2.1 --ignore-scripts --config.engine-str
 | 日志 `ERR_MODULE_NOT_FOUND: Cannot find package 'dsh-world-bili'` | 在 `bundles` 里但依赖没装/路径不对 | profile 里 `pnpm install`；确认 `node_modules/dsh-world-bili` 存在且能 `import` |
 | 插件列表里没有 `include:dsh-world-bili` | 不在 `dsh.profile.bundles`，或 package.json 依赖没装 | 补 bundles + 装依赖，重启 |
 | 列表里有但 `fiberPhase` 不是 active | 插件 apply 抛错 | 看日志里 `dsh-world-bili` 那几行；常见是配置 schema 校验失败（必填项/类型错） |
-| 日志 `1 required plugin did not activate`，整排核心插件被禁用 | 用 `link:` 指向了带 `node_modules/@deepseek-ai` 的源码目录，旧核心包被投影进 profile | 改用 tgz 安装（见 3.4-B）；检查并清掉 `profiles\desktop\node_modules\@deepseek-ai`（如果被建出来了），重启 |
+| 日志 `1 required plugin did not activate`，整排核心插件被禁用 | 用 `link:` 指向了带 `node_modules/@deepseek-ai` 的源码目录，旧核心包被投影进 profile | 改用 tgz 安装（见第 3 节）；检查并清掉 `profiles\desktop\node_modules\@deepseek-ai`（如果被建出来了），重启 |
 | 设置页看不到「世界控制台」 | profile 的 `- id: ui-settings` 被设成 `enabled: false` | 把该项改回 true（或删掉该覆盖），重启 |
 
 ### 6.3 压缩相关
@@ -245,14 +245,11 @@ npx -y pnpm@11.28.5 add @snowluma/sdk@2.2.1 --ignore-scripts --config.engine-str
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
 | `deps` 里 `✗ 登录态失效：code=-101` | cookie 过期/复制错/字段问题 | 控制台重新粘贴 SESSDATA/bili_jct/buvid3；确认 `SESSDATA` 是**大写字段**且含 `%2C` |
-| `SyntaxError: Unexpected token ':'`（`cred.mjs`） | `.mjs` 里混进 TypeScript 语法 | 0.8.3 起已修；旧版把类型标注删掉 |
 | `node tools/bili.mjs …` 报缺 cookie | 文件不在 `worlds/<worldId>/bili/credentials.json` | 检查 `WORLD_ID` 是否与配置的 `worldId` 一致 |
 | 她说“视频看不了/被验证码拦” | 她在用通用网页工具，不是 B 站 CLI | 用 `bili.mjs debrief --bvid <BV>`；或在她的 `world-prompt.md` 里写清工具用法 |
 | `act` 只打印不真发 | `bili.config.json` 的 `guard.dryRun` 为 true，或没带 `--go` | 控制台取消勾选「干跑模式」，或命令加 `--go` |
 | 想发但发不出去（4100001 等） | B 站接口参数/风控 | 先干跑看 payload；详见 `docs-md/BILI-TOOLCHAIN-AUDIT-AND-FIX.md` |
-| 命令跑完退出码 `-1073740791`，stderr 有 `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)` | 旧版 CLI 在 `fetch` 后立刻 `process.exit()`，Windows + Node 24 触发 libuv 断言（`deps`/`nav` 必崩，`act` 真发后也会崩） | 0.8.8 已改；升级后只剩正常退出码 |
-| `feed --json` 的输出前多了一行提示，`JSON.parse` 失败 | 旧版把“去重”提示写进 stdout | 0.8.8 已把提示移到 stderr；或从输出里截取第一个 `{` 开始的部分 |
-| 同一条视频被反复转发 / 日额度不生效 | 旧版账本去重与配额闸有缺口 | 0.8.6+ 已修；升级并清掉 `worlds/<id>/bili/cache` 里的旧去重状态再试 |
+| 旧版（≤0.8.8）遗留：`cred.mjs` 混 TS 语法报 `SyntaxError`、命令退出码 `-1073740791`、`feed --json` 前面多一行提示、重复转发/日额度不生效 | 都是旧版本已修的 bug | 先升级到 0.9.x，再清一次 `worlds/<id>/bili/cache` 后重试 |
 
 ### 6.6 安装/卸载被拦
 
