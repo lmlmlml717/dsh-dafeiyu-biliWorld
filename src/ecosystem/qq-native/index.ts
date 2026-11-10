@@ -53,7 +53,9 @@ const errorText = (error: unknown) => error instanceof Error ? error.message : S
  * 「主人」是哪一个 QQ：`ownerQQ` 是第一来源，没配就退回白名单第一个。
  *
  * 全模块只有这一处判断：她的自主动的话推给谁、分享发给谁、哪些消息标「（你主人）」、昵称学给谁，
- * 四件事必须指向同一个人，否则会出现「话推给 A、标记给 B」这种自相矛盾。
+ * `reach_out`（0.9.4 的 QQ 出口）发给谁，也读这一处——五件事必须指向同一个人，
+ * 否则会出现「话推给 A、标记给 B」这种自相矛盾。
+ * 主人 = `ownerQQ`，空则退回 `allowPrivate[0]`。
  */
 const ownerId = (config: QqNativeConfig): string => config.ownerQQ || config.allowPrivate[0] || '';
 

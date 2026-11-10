@@ -1,7 +1,8 @@
 # 参数总表（B 站侧 + 世界）
 
-> 版本：0.9.2。**行号已用脚本逐个核对过**（改代码后请顺手更新本表）。
+> 版本：0.9.4。**行号已用脚本逐个核对过**（改代码后请顺手更新本表）。
 > 「读它的地方」= 代码里真正读这个参数的位置；定义处另标。
+> 0.9.3/0.9.4 新增的两件事见 §1.1：`reach_out` 现在有一条内置的 QQ 私聊出口；自查（提前停下）默认停用，每日回顾保留。
 
 ## 0. 五类参数，分别改哪里
 
@@ -29,21 +30,21 @@
 | `companionName` / `partnerName` | 空 | 提示词里「我」「你」的名字（人格里的名字优先） | `src/worldPrompt.ts:34` |
 | `archiveScope` | `workspace` | 记忆归档范围，改完重启 | `src/archiveSelection.ts` |
 | `replaceCompaction` | `true` | 首次启动把 profile 的压缩行换成插件自带版 | `src/compactionSwap.ts` |
-| `life` | `true` | 生活线（闹钟/回顾/日记）总开关 | `src/index.ts:309` |
-| `diaryDir` | `<world>/diary` | 日记目录 | `src/index.ts:304` |
+| `life` | `true` | 生活线（闹钟/回顾/日记）总开关 | `src/index.ts:318` |
+| `diaryDir` | `<world>/diary` | 日记目录 | `src/index.ts:313` |
 | `fallbackWakeTime` | `09:00` | 「什么都没定」时早上叫她的时刻 | `src/life/runtime.ts`、`templates/alarm.md` |
 | `selfFile` / `personaFile` / `worldPromptFile` / `alarmTemplateFile` | `<world>/` 下默认 | 我是谁 / 人格 / 世界提示词 / 闹钟文案的覆盖位置 | `src/index.ts:300-303` |
-| `outlets` | `[]` | 她的话推给外部程序（POST），`kinds` 选 reply/busy/reach | `src/ecosystem/shared/outlets.ts` |
+| `outlets` | `[]` | 她的话推给外部程序（POST），`kinds` 选 reply/busy/reach；`reach` 是 `reach_out` 的第 2 条通道（第 1 条见 §1.1） | `src/ecosystem/shared/outlets.ts` |
 | `bridge` | `false` | 本机程序 `POST /dsh-world/bridge/say` 递话 | `src/ecosystem/bridge/bridge.ts` |
 | `wechat` | `false` | 微信通道 | `src/ecosystem/wechat/index.ts` |
 | `wechatAdapter.{python,config}` | 空 | 随微信模块启停的适配器（写了=允许它发消息） | `src/index.ts:441` |
-| `toast` / `toastAppId` | `true` / 空 | 系统通知 | `src/life/notify.ts` |
+| `toast` / `toastAppId` | `true` / 空 | 系统通知；**只有 Windows 有**（`toastSupported()` 判平台），云服务器上这条通道根本不存在 | `src/life/notify.ts` |
 | `allowedHosts` | `[]` | 控制台额外允许的 Host（跨站一律 403） | `src/console/routes.ts` |
-| `qqNative.enabled` | `false` | QQ 原生通道总开关 | `src/index.ts:455` |
+| `qqNative.enabled` | `false` | QQ 原生通道总开关；打开时 `reach_out` 自动多一条 QQ 私聊出口（§1.1） | `src/index.ts:556` |
 | `qqNative.wsUrl` | `ws://127.0.0.1:3003` | SnowLuma 的 OneBot WS 地址 | `src/ecosystem/qq-native/snowluma.ts` |
 | `qqNative.accessToken` | 空 | OneBot token（空串不传） | 同上 |
-| `qqNative.allowPrivate` | `[]` | 能私聊她的 QQ | `qq-native/index.ts:327` |
-| `qqNative.ownerQQ` | 空 | **主人**：接收自主发言/分享；空则退回 `allowPrivate[0]` | `src/bili/owner.ts:35` |
+| `qqNative.allowPrivate` | `[]` | 能私聊她的 QQ；**第一个也是「主人」的兜底**（`ownerQQ` 没配时用它） | `qq-native/index.ts:327` |
+| `qqNative.ownerQQ` | 空 | **主人**：接收自主发言/分享、也是 `reach_out` 的收件人；空则退回 `allowPrivate[0]`（见 §1.1） | `src/bili/owner.ts:35` |
 | `qqNative.allowGroups` | `[]` | 允许接话的群 | `qq-native/index.ts:326` |
 | `qqNative.autoReply` | `true` | 关掉＝收到不理（不花一轮） | `qq-native/index.ts:379` |
 | `qqNative.contextMessages` | `6` | 每轮带几条上文（夹 1–20） | `qq-native/index.ts:380` |
@@ -64,6 +65,20 @@
 | `comment.enabled` | `false` | 评论开关（镜像进 bili.config.json） | `src/index.ts:183` → `bili-write.mjs:365` |
 | `comment.hardDailyMax` | `5` | 评论每日硬上限，面板条数被它钳制；0 = 不限 | `bili-write.mjs:307` `commentCap`（调用 385） |
 | `comment.minIntervalSec` | `3600` | 两条评论最小间隔（秒） | `bili-write.mjs:377` |
+
+### 1.1 `reach_out`（她主动找主人）走哪几条通道
+
+| 通道 | 什么时候在 | 送到哪 | 送不到时 |
+|---|---|---|---|
+| **QQ 私聊**（0.9.4 起内置） | `qqNative.enabled: true`、通道在线、配了主人 | 主人 QQ 私聊，一句一条 | 静默中 / 未连接 / 没配主人都报「没送到」，不排队 |
+| `outlets` | 配置里有 `kinds` 含 `reach` 的出口 | 你登记的 HTTP 接收端 | 非 2xx 或回 `ok:false` 算失败 |
+| 系统通知 | 只在 Windows 且 `toast: true` | 桌面右下角 | 找不到通知身份就失败 |
+
+- 主人是谁：`qqNative.ownerQQ`，空则 `qqNative.allowPrivate[0]`——`qq-native/index.ts:58` 的 `ownerId`，全模块唯一口径（自主发言推给谁、分享发给谁、标「（你主人）」、`reach_out` 发给谁，四件事同一个人）。
+- 规则：每条通道独立成败，**全失败才报错**、部分成功照实汇报（`src/life/tools.ts` 文件头「坑」）。
+- 云服务器上没有 toast，所以实际就是「QQ 私聊 + outlets」两条；QQ 在线她就找得到你。
+- 静默（`qqNative.mutedUntil`）连这条一起挡：静默是「别吵他」，不排队、直接回没发。
+- 这条出口只收 `reach`；回复、在忙、整轮转发、share 队列都不走它（`src/index.ts:547` 起）。
 
 ---
 
@@ -254,8 +269,8 @@
 | 23:00 | 回顾时间默认值 | `life/alarm.ts:28` |
 | 5 min | 闹钟断线保护分段检查 | `life/alarmTimer.ts:31` |
 | 5 min | 「她卡住了」判定 | `life/runtime.ts:55` |
-| 4000 字 | 「我是谁」长度上限 | `self.ts:15` |
-| 20 / 100 / 4000 | 记忆查找默认/最多条数、读取上限 | `memory.ts:50` |
+| 回顾开、自查关 | 生活线自消息：`LifeOptions.earlyStop` 不传即停用；`dailyReview: true` 保留（日记/「我是谁」快照/回顾后压缩靠它） | `src/index.ts:313`、`src/life/types.ts:58` |
+| 4000 字 | 「我是谁」长度上限 | `self.ts:15` || 20 / 100 / 4000 | 记忆查找默认/最多条数、读取上限 | `memory.ts:50` |
 | 2 MB / 2000 个 | 单记忆源文件上限 / 每目录文件数 | `memoryFiles.ts:29` |
 | 20 MB | 相册单张上限 | `life/photos.ts:20` |
 | 「伙伴」/「TA」 | 没配名字时的默认称呼 | `worldPrompt.ts:35` |
@@ -289,3 +304,6 @@
 8. **`ledger.enabled` / `ledger.promptInQQ`** 不生效。
 9. **`bilibili.danmaku.*`** 有配置有闸门，但发送通道是注释状态，等于用不了。
 10. **`debrief.frames: false` 时不抽帧**，但 `--frames` 可临时打开；`--no-frames` 永远优先。
+11. **云服务器上没有桌面通知**：`toastSupported()` 只认 Windows，`toast` 写 `true` 也没用；`reach_out` 在云上原来只剩 outlets 一条路，0.9.4 起内置了 QQ 私聊出口（§1.1）。
+12. **静默会挡 `reach_out`**：`qqNative.mutedUntil` 没到点时，她主动找你也发不出去，`reach_out` 会报「静默中（到 …），这条没发」；静默不排队。
+13. **整轮转发只认 B 站唤醒（0.9.3）**：闹钟、每日回顾、提前停下这些轮次不再推给主人，只在她的会话里出现；`lifeKind` 加新值也不会自动开始转发。

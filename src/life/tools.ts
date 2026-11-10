@@ -6,6 +6,8 @@
  * 依赖：defineTool、messages 的模板、notify.Notifier、outlets.pushOf、worldPrompt.WorldNames。
  * 坑：check_alarm/cancel_alarm 只有宿主同时提供两个实现时才出现，避免出现只能定不能查的工具；
  * reach_out 的每个通道独立成败，全失败才抛错，部分成功照实汇报。
+ * 通道从 notifier 来：toast（仅 Windows）+ 配置的 outlets + 0.9.4 起 qq-native 注册的 QQ 私聊出口
+ * （由 src/index.ts 组进 outlets，kinds 只有 reach；静默/离线时抛错，不排队）。
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import type { Notifier } from './notify.ts';

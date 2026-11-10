@@ -1,6 +1,9 @@
 /**
  * 系统通知（Windows toast）与 reach_out 的通道集合。
  *
+ * 注意 toast 只有 Windows 有（`toastSupported()` 判平台）：云服务器上这条通道根本不存在，
+ * `reach_out` 在那边得靠 outlets 或 qq-native 的 QQ 出口（0.9.4 起内置）才送得出去。
+ *
  * 导出：Notifier、toastSupported、KNOWN_DSH_APP_IDS、toastScript、windowsToast。
  * 调用方：life/tools.ts 的 reach_out 与 runtime 里的 Notifier 组装。
  * 依赖：node:child_process（PowerShell）、ecosystem/shared/outlets 的 Outlet 类型。
