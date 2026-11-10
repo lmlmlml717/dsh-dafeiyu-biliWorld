@@ -80,6 +80,21 @@
 - 静默（`qqNative.mutedUntil`）连这条一起挡：静默是「别吵他」，不排队、直接回没发。
 - 这条出口只收 `reach`；回复、在忙、整轮转发、share 队列都不走它（`src/index.ts:547` 起）。
 
+### 1.2 整轮转发：哪些轮次会推给主人 QQ
+
+**没有配置项**，白名单写死在 `qq-native/index.ts:459`；判定说明在 `forwardOwnTurns` 的文档块（`qq-native/index.ts:423-442`）。
+
+| 这一轮是怎么来的 | 会整轮转发吗 | 说明 |
+|---|---|---|
+| B 站唤醒（`lifeKind: 'bili-wake'`） | **会** | 她分享视频时主人收得到；同段话 30 分钟内只推一次 |
+| 闹钟（没有 `lifeKind`，就是截图里这种 15:55 的「说好做到的时间到了」） | 不会 | 那是她自己的时间线，不是对主人说的话 |
+| 每日回顾 | 不会 | 同上 |
+| 提前停下（`early-stop`） | 不会 | 0.8.22 起就不推 |
+| 主人在桌面或 QQ 说话 | 不会 | 那是在回主人，回复已由 answer() 原路回过 |
+| 不是她的家会话 | 不会 | 只看 `isHome` + 世界内 |
+
+一句话：**只有 B 站唤醒那一轮会整轮推给主人**；其余生活线轮次留在她的会话里，她要主动找你走 `reach_out`（§1.1）或 `share` 队列。
+
 ---
 
 ## 2. 世界开关（`<world>/world.json`）
@@ -262,6 +277,7 @@
 | 2000 字 / 500 条 | QQ 单条入站上限 / 去重记忆 | `qq-native/index.ts:23,25` |
 | 600 ms | 一段回复拆多条时每条间隔 | `qq-native/index.ts:27` |
 | 30 分钟 / 40 条 | 整轮转发去重窗口 / 记忆条数 | `qq-native/index.ts:29,31` |
+| 只有 `bili-wake` 整轮转发 | `forwardOwnTurns` 的白名单（见 §1.2）；没有配置项，给 `lifeKind` 加新值也不会自动开始转发 | `qq-native/index.ts:459` |
 | 8 条 / 16 KB | 群聊上下文上限 | `shared/context.ts:63,86` |
 | 64 KB / 32 KB | 控制台 / 桥的请求体上限 | `console/routes.ts:32`、`bridge/route.ts:19` |
 | 5 s | 控制台快照缓存 | `console/snapshot.ts:34` |
@@ -306,6 +322,6 @@
 10. **`debrief.frames: false` 时不抽帧**，但 `--frames` 可临时打开；`--no-frames` 永远优先。
 11. **云服务器上没有桌面通知**：`toastSupported()` 只认 Windows，`toast` 写 `true` 也没用；`reach_out` 在云上原来只剩 outlets 一条路，0.9.4 起内置了 QQ 私聊出口（§1.1）。
 12. **静默会挡 `reach_out`**：`qqNative.mutedUntil` 没到点时，她主动找你也发不出去，`reach_out` 会报「静默中（到 …），这条没发」；静默不排队。
-13. **整轮转发只认 B 站唤醒（0.9.3）**：闹钟、每日回顾、提前停下这些轮次不再推给主人，只在她的会话里出现；`lifeKind` 加新值也不会自动开始转发。
+13. **整轮转发只认 B 站唤醒（0.9.3，见 §1.2）**：闹钟、每日回顾、提前停下这些轮次不再推给主人，只在她的会话里出现；`lifeKind` 加新值也不会自动开始转发。
 14. **`focus` 的 `remainMin: 0` 有两种意思**：设了时限且刚到点（此时 `expired: true`）、完全没设时限（`until: 0`）。**只有 `until > 0` 时 `remainMin` 才表示「还剩几分钟」**；0.9.5 之前把 `until: 0` 读成「还剩 0 分钟」，导致每次 B 站唤醒都被跳过——现在 `shouldSkipWake` 先看 `until`。
 15. **`focus` 只有三种活动**：`bilibili` / `rest` / `off`；「在看书」只能写进 `--note`，不参与是否跳过的判断。
