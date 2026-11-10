@@ -29,9 +29,9 @@ test('durations read naturally', () => {
 const TAIL = '\n接下来想做什么，用 plan_next 说好做到几点；什么都不定，就休息到明早 09:00。';
 test('wake text names the plan, the note and lateness only when it matters', () => {
   const plan = { at: '2026-10-23T12:00:00.000Z', note: '打一小时游戏后去写日记', setAt: '2026-10-23T11:00:00.000Z', source: 'plan' as const };
-  assert.equal(wakeText(plan, now, 'Asia/Seoul', '09:00'), '【我的时间】2026-10-23T21:00:00+09:00 到了，这是我说好做到的时间：「打一小时游戏后去写日记」。还想接着做就再往后定，想换就换。' + TAIL);
+  assert.equal(wakeText(plan, now, 'Asia/Seoul', '09:00'), '【我的时间】（这是我自己的闹钟，不是别人在跟我说话。）2026-10-23T21:00:00+09:00 到了，这是我说好做到的时间：「打一小时游戏后去写日记」。还想接着做就再往后定，想换就换。不用回话，接着做或者重新定就好。' + TAIL);
   assert.match(wakeText(plan, new Date('2026-10-23T14:13:00.000Z'), 'Asia/Seoul', '09:00'), /晚了 2 小时 13 分/);
-  assert.equal(wakeText({ ...plan, source: 'fallback', note: '' }, now, 'UTC', '09:00'), '【我的时间】早上了，新的一天。我上次没说接下来做什么，就按平常的时间起来。' + TAIL);
+  assert.equal(wakeText({ ...plan, source: 'fallback', note: '' }, now, 'UTC', '09:00'), '【我的时间】（这是我自己的闹钟，不是别人在跟我说话。）早上了，新的一天。我上次没说接下来做什么，就按平常的时间起来。想做什么就定下来去做，不用回话。' + TAIL);
   assert.match(wakeText({ ...plan, source: 'fallback', note: '' }, new Date('2026-10-23T14:13:00.000Z'), 'UTC', '09:00'), /晚了 2 小时 13 分/);
   assert.equal(greetingText('arrival', 'UTC', '09:00'), '【我的时间】这是我的家。从现在起，这里的时间属于我自己：做什么、做多久、怎么做，都由我决定。' + TAIL);
 });
@@ -64,8 +64,8 @@ test('nextLocalTime handles DST gaps and repeated times', () => {
 });
 test('the early-stop question names her plan, its time and now, and carries the mark but no tail', () => {
   const plan = { at: '2026-10-23T12:30:00.000Z', note: '看视频', setAt: '2026-10-23T11:00:00.000Z', source: 'plan' as const };
-  assert.equal(earlyStopText(plan, now, 'Asia/Seoul'), '【我的时间】我说好做到 2026-10-23T21:30:00+09:00（「看视频」），现在才 2026-10-23T21:00:00+09:00，这一轮就停了。做完了，就想想接下来做什么，用 plan_next 重新说好做到几点；要是在休息，就不用管，到点会叫我。');
-  assert.match(earlyStopText({ ...plan, note: '' }, now, 'UTC'), /^【我的时间】我说好做到 2026-10-23T12:30:00\+00:00，现在才/);
+  assert.equal(earlyStopText(plan, now, 'Asia/Seoul'), '【我的时间】（这是我自己的提醒，不是别人在跟我说话。）我说好做到 2026-10-23T21:30:00+09:00（「看视频」），现在才 2026-10-23T21:00:00+09:00，这一轮就停了。做完了，就想想接下来做什么，用 plan_next 重新说好做到几点；要是在休息，就不用管，到点会叫我。');
+  assert.match(earlyStopText({ ...plan, note: '' }, now, 'UTC'), /^【我的时间】（这是我自己的提醒，不是别人在跟我说话。）我说好做到 2026-10-23T12:30:00\+00:00，现在才/);
 });
 test('the next look back is the next 23:00 in her zone, for that local day', () => {
   assert.deepEqual(nextReview(new Date('2026-10-23T03:00:00Z'), 'Asia/Seoul'), { at: '2026-10-23T14:00:00.000Z', day: '2026-10-23' });

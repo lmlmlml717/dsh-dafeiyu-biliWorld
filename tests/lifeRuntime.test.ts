@@ -42,7 +42,7 @@ function fakeTimers(clock: { now: Date }) {
     jump(ms: number) { clock.now = new Date(clock.now.getTime() + ms); for (const entry of pending) entry.at += ms; },
   };
 }
-interface SetupOptions { afterReview?: () => void; before?: (worldDir: string) => Promise<void>; host?: (host: LifeHost) => LifeHost; store?: (store: LifeStore) => LifeStore; notifier?: Notifier; dailyBudget?: () => number | undefined; inWorkspace?: (id: string) => boolean; alarmContext?: (now: Date) => string | undefined; schedule?: { review: string; wake: string } }
+interface SetupOptions { afterReview?: () => void; before?: (worldDir: string) => Promise<void>; host?: (host: LifeHost) => LifeHost; store?: (store: LifeStore) => LifeStore; notifier?: Notifier; dailyBudget?: () => number | undefined; inWorkspace?: (id: string) => boolean; alarmContext?: (now: Date) => string | undefined; schedule?: { review: string; wake: string }; lifeFlags?: { earlyStop?: boolean; dailyReview?: boolean } }
 async function setup(t: test.TestContext, model: (request: GenerateOptions, index: number) => AsyncIterable<StreamChunk>, setupOptions: SetupOptions = {}) {
   const requests: GenerateOptions[] = [];
   const { ctx, root, cleanup, errors } = await hostFixture(t, request => { if (request.purpose !== 'compaction') requests.push(request); return model(request, requests.length - 1); });
@@ -68,7 +68,9 @@ async function setup(t: test.TestContext, model: (request: GenerateOptions, inde
   const host = setupOptions.host?.(baseHost) ?? baseHost;
   const baseStore = createLifeStore(worldDir, config.timeZone);
   const store = setupOptions.store?.(baseStore) ?? baseStore;
-  const options = { worldDir, roomDir: join(worldDir, 'room'), diaryDir: join(worldDir, 'diary'), selfFile: join(worldDir, 'room', 'self.md'), schedule: () => setupOptions.schedule ?? { review: '23:00', wake: '09:00' }, timeZone: config.timeZone, alarmFile: join(worldDir, 'alarm.md') };
+  // 0.9.3：两个生活线自消息开关默认关（`lifeFlags: {}` 测停用分支），这里显式打开，
+  // 让回顾/自查的实现继续被测到；要测装配层的现状（回顾开、自查关）用 setupOptions.lifeFlags 覆盖。
+  const options = { worldDir, roomDir: join(worldDir, 'room'), diaryDir: join(worldDir, 'diary'), selfFile: join(worldDir, 'room', 'self.md'), schedule: () => setupOptions.schedule ?? { review: '23:00', wake: '09:00' }, timeZone: config.timeZone, alarmFile: join(worldDir, 'alarm.md'), ...(setupOptions.lifeFlags ?? { earlyStop: true, dailyReview: true }) };
   const make = () => createLifeRuntime({ ctx, config, options, store, host, notifier: setupOptions.notifier ?? { toast: async () => {}, outlets: [] }, clock: () => clock.now, timers, ...(setupOptions.dailyBudget ? { dailyBudget: setupOptions.dailyBudget } : {}), inWorkspace: setupOptions.inWorkspace, alarmContext: setupOptions.alarmContext, ...(setupOptions.afterReview ? { afterReview: setupOptions.afterReview } : {}) });
   let life = make();
   cleanup.push(() => life.stop());
@@ -200,7 +202,7 @@ test('a home turn that stops well before her own alarm asks once whether she is 
   await createAgent(s.ctx, 'home-0');
   await s.start();
   assert.equal(s.requests.length, 3, 'the first turn (two steps), then one question');
-  assert.match(textOf(s.requests[2]!), /【我的时间】我说好做到 2026-10-23T13:30:00\+09:00（「看视频」），现在才 2026-10-23T12:00:00\+09:00，这一轮就停了。/);
+  assert.match(textOf(s.requests[2]!), /（这是我自己的提醒，不是别人在跟我说话。）我说好做到 2026-10-23T13:30:00\+09:00（「看视频」），现在才 2026-10-23T12:00:00\+09:00，这一轮就停了。/);
   assert.equal(s.store.read().alarm?.nudged, true, 'asked is remembered across restarts');
   s.timers.advance(90 * 60_000); await s.idle();
   assert.equal(s.requests.length, 4);
@@ -214,8 +216,20 @@ test('the turn the question started never asks again, even with a new alarm, so 
   assert.equal(s.requests.length, 4);
   assert.deepEqual(s.alarm(), { at: '2026-10-23T04:00:00.000Z', source: 'plan' });
 });
-test('a turn the plugin woke her for is not her stopping early', async t => {
-  const s = await setup(t, () => textResponse('嗯'));
+test('0.9.3：两个开关都不传时，不排每日回顾、也不问提前收工', async t => {
+  // 装配层现在传 dailyReview: true、不传 earlyStop；这条测的是"都不传"的默认行为，
+  // 顺带确认 start() 会清掉 life.json 里旧代码排下的 review。
+  const s = await setup(t, (_request, index) => index === 0 ? toolCall('plan_next', { after_minutes: 90, note: '看视频' }) : textResponse('嗯'), { before: existingHome('起来'), lifeFlags: {} });
+  await createAgent(s.ctx, 'home-0');
+  await s.start();
+  assert.equal(s.requests.length, 2, '两步收尾，没有「这一轮就停了」那一问');
+  assert.equal(s.store.read().alarm?.nudged, undefined, '没有问过，nudged 不落盘');
+  assert.equal(s.store.read().review, undefined, 'start 时把以前排下的回顾清掉');
+  s.timers.advance(90 * 60_000); await s.idle();
+  assert.equal(s.requests.length, 3, '闹钟照常响');
+  assert.equal(s.store.wakes().some(wake => wake.source === 'review'), false, '晚上不会再排回顾');
+});
+test('a turn the plugin woke her for is not her stopping early', async t => {  const s = await setup(t, () => textResponse('嗯'));
   await s.start();
   s.life.planNext({ after_minutes: 60 }, '看书');
   const home = s.ctx.agents.get(SessionId(s.life.snapshot().homeSessionId!))!;

@@ -176,31 +176,35 @@ test('@全体 is an announcement, not her name', async t => {
   assert.equal(qq.asked.length, 1);
 });
 
-test('what she says in a turn of her own at home also reaches the owner, and nothing else does', async t => {
-  const qq = await channel(t, text => text.includes('闹钟') ? '起来了\n\n今天先写日记' : '回你', { ownerQQ: '100' });
+test('只有 B 站唤醒那一轮推给主人；闹钟、回答别人的话、别的会话都不推', async t => {
+  const qq = await channel(t, text => text.includes('B 站到点了') ? '刷到一个视频，挺有意思' : text.includes('闹钟') ? '起来了\n\n今天先写日记' : '回你', { ownerQQ: '100' });
+  qq.agent.followup(createUserMessage({ source: { kind: 'dsh-world-life', lifeKind: 'bili-wake' }, content: [{ type: 'text', text: 'B 站到点了' }] }));
+  await qq.agent.whenIdle(); await settle(900);
+  assert.deepEqual(qq.transport.sent, [{ to: '100', parts: '刷到一个视频，挺有意思' }]);
+  // 0.9.3：闹钟是插件在叫她，那句话不是给主人的，不再整轮转发。
   qq.agent.followup(createUserMessage({ source: { kind: 'dsh-world-life' }, content: [{ type: 'text', text: '【我的时间】闹钟响了' }] }));
   await qq.agent.whenIdle(); await settle(900);
-  assert.deepEqual(qq.transport.sent, [{ to: '100', parts: '起来了' }, { to: '100', parts: '今天先写日记' }]);
+  assert.equal(qq.transport.sent.length, 1, '闹钟那一轮不推');
   qq.agent.followup(createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: '桌面上说的话' }] }));
   await qq.agent.whenIdle(); await settle();
-  assert.equal(qq.transport.sent.length, 2, 'a turn answering someone is not hers to forward');
+  assert.equal(qq.transport.sent.length, 1, 'a turn answering someone is not hers to forward');
   const elsewhere = (await qq.ctx.agents.create({ sessionId: SessionId('coding'), agentOptions: { provider: 'test', model: 'test' } })).agent;
-  elsewhere.followup(createUserMessage({ source: { kind: 'dsh-world-life' }, content: [{ type: 'text', text: '闹钟' }] }));
+  elsewhere.followup(createUserMessage({ source: { kind: 'dsh-world-life', lifeKind: 'bili-wake' }, content: [{ type: 'text', text: 'B 站到点了' }] }));
   await elsewhere.whenIdle(); await settle();
-  assert.equal(qq.transport.sent.length, 2, 'only her home');
+  assert.equal(qq.transport.sent.length, 1, 'only her home');
 });
 
-test('提前停下不推给主人，B 站唤醒和闹钟照旧', async t => {
+test('0.9.3：整轮转发只认 B 站唤醒，提前停下和闹钟都不推', async t => {
   const qq = await channel(t, text => text.includes('这一轮就停了') ? '六点。这就去。' : text.includes('B 站到点了') ? '刷到一个视频，挺有意思' : '起来了', { ownerQQ: '100' });
   qq.agent.followup(createUserMessage({ source: { kind: 'dsh-world-life', lifeKind: 'early-stop' }, content: [{ type: 'text', text: '【我的时间】这一轮就停了' }] }));
   await qq.agent.whenIdle(); await settle(600);
   assert.equal(qq.transport.sent.length, 0, '提前停下的问话不该转到主人');
+  qq.agent.followup(createUserMessage({ source: { kind: 'dsh-world-life' }, content: [{ type: 'text', text: '【我的时间】闹钟响了' }] }));
+  await qq.agent.whenIdle(); await settle(900);
+  assert.equal(qq.transport.sent.length, 0, '闹钟那一轮也不推了');
   qq.agent.followup(createUserMessage({ source: { kind: 'dsh-world-life', lifeKind: 'bili-wake' }, content: [{ type: 'text', text: 'B 站到点了' }] }));
   await qq.agent.whenIdle(); await settle(900);
   assert.equal(qq.transport.sent.length, 1, 'B 站唤醒里她的分享要推给主人');
-  qq.agent.followup(createUserMessage({ source: { kind: 'dsh-world-life' }, content: [{ type: 'text', text: '【我的时间】闹钟响了' }] }));
-  await qq.agent.whenIdle(); await settle(900);
-  assert.equal(qq.transport.sent.length, 2, '闹钟到点的自述仍然推给主人');
 });
 
 test('主人本人的私聊，每条消息前缀都标「（你主人）」；别人不标', async t => {
@@ -219,7 +223,7 @@ test('主人本人的私聊，每条消息前缀都标「（你主人）」；�
 
 test('同一段话半小时内只推一次：重放或重试不该让主人收到两条一样的', async t => {
   const qq = await channel(t, '刷到一个视频，笑死', { ownerQQ: '100' });
-  const life = () => createUserMessage({ source: { kind: 'dsh-world-life' }, content: [{ type: 'text', text: '【我的时间】闹钟响了' }] });
+  const life = () => createUserMessage({ source: { kind: 'dsh-world-life', lifeKind: 'bili-wake' }, content: [{ type: 'text', text: 'B 站到点了' }] });
   qq.agent.followup(life()); await qq.agent.whenIdle(); await settle(600);
   assert.equal(qq.transport.sent.length, 1);
   qq.agent.followup(life()); await qq.agent.whenIdle(); await settle(600);

@@ -26,10 +26,11 @@ declare module '@deepseek-ai/dsh-llm' {
     'dsh-world-life': {
       kind: 'dsh-world-life';
       /**
-       * 同是「生活线」的消息，来源不同，转发规则也不同（0.8.20）：
-       *   alarm      —— 闹钟到点，她自己开的一轮，回复要推给主人；
-       *   early-stop —— 提前收工的问话，不推（她自己知道就行）；
-       *   bili-wake  —— B 站定时唤醒，分享由她按 prompt 自己发 QQ，不再重复转发。
+       * 同是「生活线」的消息，来源不同，转发与"要不要回话"的规则也不同：
+       *   alarm      —— 闹钟到点（缺省）；0.9.3 起**不**整轮转发，文案里写清"这是我自己的闹钟"；
+       *   early-stop —— 提前收工的问话；0.9.3 起默认停用（LifeOptions.earlyStop），也不转发；
+       *   bili-wake  —— B 站定时唤醒；0.9.3 起是唯一整轮转发给主人的一种（她分享视频时主人收得到）。
+       * 0.8.20 时规则是"除 early-stop 外都转发"，0.9.3 翻成白名单：只有 bili-wake 转。
        * 缺省按 alarm 处理，兼容旧代码与旧消息。
        */
       lifeKind?: 'alarm' | 'early-stop' | 'bili-wake';

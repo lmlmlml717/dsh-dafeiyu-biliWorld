@@ -87,6 +87,20 @@ export function createLifeRuntime(deps: LifeDeps) {
   const state = store.read();
   let stopped = false;
   let delivery: Promise<void> | undefined;
+  /**
+   * 【0.9.3】生活线"自己发起"的消息有两个开关，默认都关，装配层显式传 true 才发。
+   *
+   * 这两类消息都是 `say()` 用 `agent.steer()` 投进她会话的 user 消息：模型看见的是"有人说了一句话"，
+   * 于是会回一句；可内容只是她自己的时间线（到点了、该写日记了），回出来就成了对着主人说的话，
+   * 整轮转发还会把它推到主人手机上（转发那条已由 qq-native 的白名单挡住）。
+   * 0.9.3 先停掉自查，回顾留着——她的日记和「我是谁」快照都靠 23:00 那一次；理由与副作用见
+   * `LifeOptions.earlyStop` / `LifeOptions.dailyReview` 的注释。
+   *
+   * 三处闸门：`nextJob()` 不返回 review 任务、`askIfDoneEarly()` 第一行就返回、
+   * `start()` 把 life.json 里已排的 review 清掉（免得以后打开开关时补跑一次旧的）。
+   */
+  const earlyStopEnabled = options.earlyStop === true;
+  const dailyReviewEnabled = options.dailyReview === true;
 
   /** Bookkeeping after the fact: a failure is a fault, never a broken turn. */
   function record(work: () => void): void {
@@ -114,8 +128,13 @@ export function createLifeRuntime(deps: LifeDeps) {
     const records = days.flatMap(each => store.activity(each)).sort((a, b) => Date.parse(a.time) - Date.parse(b.time));
     return summarizeSince(records, alarm.setAt, now);
   };
-  // lifeKind 只用于"这条生活线消息是什么性质"：闹钟到点（默认）会被 QQ 转发给主人；
-  // 提前停下（early-stop）不转发——那是插件在问她自己，不是她要说给主人听的话（0.8.20）。
+  /**
+   * 生活线消息的形状。`lifeKind` 只说明"这条是什么性质"：闹钟（缺省）、提前停下、B 站唤醒。
+   *
+   * 注意它**不是**转发开关：0.9.3 起整轮转发只认 `bili-wake`（见 qq-native 的 forwardOwnTurns），
+   * 加新的 kind 不会自动开始转发。这里也决定了消息按 `role: user` 投进她会话——
+   * 模型会把它当成"有人说话"，所以文案开头要写清"这是我自己的闹钟"（见 templates/alarm.md）。
+   */
   const lifeMessage = (text: string, lifeKind?: 'alarm' | 'early-stop') => createUserMessage({ source: { kind: 'dsh-world-life', ...(lifeKind ? { lifeKind } : {}) }, content: [{ type: 'text', text }] });
   const say = (agent: Agent, message: string | UserMessage, lifeKind?: 'alarm' | 'early-stop') => {
     // 用 steer 放进她的收件箱，再由 flush 保证宿主已经落盘，重启后才找得到。
@@ -201,7 +220,8 @@ export function createLifeRuntime(deps: LifeDeps) {
     // 优先级：新家问候 > 到点更早的那个（回顾或闹钟）。
     const { greeting, review, alarm } = state;
     if (greeting) return { kind: 'greeting', at: greeting.at, greeting };
-    if (review && (!alarm || Date.parse(review.at) <= Date.parse(alarm.at))) return { kind: 'review', at: review.at, review };
+    // 回顾停用时连排期都不看：state.review 可能还在（旧文件），但这里直接跳过，闹钟照常。
+    if (dailyReviewEnabled && review && (!alarm || Date.parse(review.at) <= Date.parse(alarm.at))) return { kind: 'review', at: review.at, review };
     return alarm && { kind: 'alarm', at: alarm.at, alarm };
   }
   const timer = createAlarmTimer({ clock, timers, dueAlarm: () => nextJob()?.at, fire: () => void deliver() });
@@ -384,6 +404,9 @@ export function createLifeRuntime(deps: LifeDeps) {
   // Stopping early: asked once per alarm whether she is done.
   const earlyStop = createEarlyStopWatch();
   function askIfDoneEarly(completed: boolean): void {
+    // 0.9.3：自查停用（LifeOptions.earlyStop）。返回得早——不读 state.alarm、不落 nudged，
+    // 所以以后把开关打开时，这一次没被问过的收工仍然会被问。
+    if (!earlyStopEnabled) return;
     const now = clock(); const alarm = state.alarm;
     if (!earlyStop.turnEnded(completed, alarm, now) || stopped) return;
     alarm.nudged = true;
@@ -504,8 +527,10 @@ export function createLifeRuntime(deps: LifeDeps) {
       }),
     );
     for (const agent of ctx.agents.list()) attach(agent);
+    // 0.9.3：每日回顾停用时就不排；以前排下的也清掉，免得以后打开开关时补跑一次旧的。
+    if (!dailyReviewEnabled) { if (state.review) { delete state.review; record(() => store.write(state)); } }
     // 第一次启动时排上今晚的回顾；之后按日期滚动，不重复排。
-    if (!state.review) { state.review = nextReview(clock(), timeZone, deps.options.schedule().review); record(() => store.write(state)); }
+    else if (!state.review) { state.review = nextReview(clock(), timeZone, deps.options.schedule().review); record(() => store.write(state)); }
     if (followSchedule()) record(() => store.write(state));
     try {
       const agent = await home.open(); faults.clear('home');

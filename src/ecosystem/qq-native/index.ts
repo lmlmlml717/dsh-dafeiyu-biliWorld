@@ -421,6 +421,22 @@ export function createQqNativeModule(deps: {
   /**
    * 她自己开的一轮（家里的闹钟、世界线）说完的话，也推一份给主人。只看她的家，只看由她自己的时间开起来、
    * 中途没有人说话的那一轮：有人说话的轮次是在回那个人，QQ 进来的话已经由上面那条路原路回过了。
+   *
+   * 【0.9.3 改了什么】以前除了 `early-stop` 之外的生活线消息都算"她自己开的轮"
+   * （`lifeKind !== 'early-stop'`），于是闹钟（没有 `lifeKind`）那一轮的独白也被整轮推给主人——
+   * 她早上抱怨一句「七点半就叫我」，主人收到的像是她在回自己。现在白名单只有 `bili-wake`：
+   * 那是 B 站到点叫她，她分享视频时主人应该收得到（和 0.8.13 的体验一致）；
+   * 闹钟、回顾、自查都只是她自己的时间线，不外发。
+   *
+   * 【怎么判定】看这一轮里第一条生活线 `user/message` 的来源：
+   * - `dsh-world-life` + `lifeKind === 'bili-wake'` → 记成 own，整轮转发；
+   * - `dsh-world-life` 其余（无 lifeKind 的闹钟、review、early-stop）→ 不转发；她这轮真想找主人，
+   *   reach_out 那条线还在，不靠转发；
+   * - `user`（主人在桌面上说话）→ 整轮作废：那是在回主人，answer() 已经原路回过。
+   *
+   * 【与 share 的区别】这条转发的是"她这一轮说的话"，可能只说一句「刷到一个视频」，链接会丢；
+   * `share` 队列（startShareBox）带标题和 BV，是确定会到的那一条，两条互不冲突。
+   * 【去重】同一段话 30 分钟内只推一次：重放、重试、同一轮被记两次都不会让主人收两条。
    */
   function forwardOwnTurns(): () => void {
     // 0.8.25：收集这一轮**所有** assistant 文本，而不是只留最后一条。
@@ -435,10 +451,10 @@ export function createQqNativeModule(deps: {
       const turn = turns.get(session.id);
       if (!turn) return;
       if (event.type === 'user/message') {
-        // 0.8.22：只排掉「提前停下」这一种。它才是"六点。这就去。""你要每句话都来问一遍我干嘛"的来源；
-        // B 站唤醒要照常转发——她分享视频时，主人应该收得到（和 0.8.13 的体验一致）。
+        // 0.9.3：只有 B 站唤醒这一种整轮转发。闹钟、回顾、自查是插件在叫她，不是她在跟主人说话；
+        // 以前只排掉「提前停下」，早上那句「七点半就叫我」就被当成她回主人的话推了过去。
         const lifeKind = (event.data.source as { lifeKind?: string }).lifeKind;
-        if (event.data.source.kind === 'dsh-world-life' && lifeKind !== 'early-stop') turn.own = true;
+        if (event.data.source.kind === 'dsh-world-life' && lifeKind === 'bili-wake') turn.own = true;
         else if (event.data.source.kind === 'user') { turns.delete(session.id); return; }
       }
       if (event.type === 'assistant/message') {

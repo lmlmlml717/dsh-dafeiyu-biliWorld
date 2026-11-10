@@ -248,7 +248,8 @@ export function biliPrompt(now: Date, o: DailyBiliOptions, tz: string, planState
   const dry = o.allowWrite ? '' : '\n（注意：当前是干跑，对外发的操作只打印不真发。确认没问题后把 bili.config.json 的 guard.dryRun 改 false，或 dailyBili.allowWrite 改 true。）'
   // QQ 段只在她有主人 QQ 时出现。0.8.23：删掉 NapCat POST。0.8.25（方案 B）：分享这类东西有了自己的命令
   // —— `share` 把「标题 + BV + 你想说的那句」放进队列，宿主 qqNative 私聊发出去，比「靠最后一句转发」确定。
-  // 转发那条线照旧在（她这一轮说的话仍会整轮推给主人），两条互不冲突：一条是她的话，一条是那条视频。
+  // 整轮转发那条线还在：0.9.3 之后只转 B 站唤醒这一种（正是这一轮），所以还是「她的话」+「那条视频」两条，
+  // 互不冲突；闹钟、回顾那些轮次不再转发。
   const qq = o.ownerQQ
     ? `\n（想让我也看这条：\`node ${o.biliMjs} share --bvid <BV> --say "<你想说的那句>"\` 递给我——我收到的是标题和 BV。`
       + `怎么想的照常说，别为了分享把话变成汇报。纯文字动态不用发我，你自己记着就行。）`

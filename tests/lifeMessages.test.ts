@@ -30,11 +30,11 @@ test('a world alarm.md replaces sections one by one; an unreadable one falls bac
   await writeFile(file, '## 闹钟响了\n叮！{{time}} 到啦{{#note}}：{{note}}{{/note}}\n## 结尾提醒\n');
   const own = readAlarmMessages(file);
   assert.equal(wakeText(plan, now, 'Asia/Seoul', '09:00', own), '【我的时间】叮！2026-10-23T21:00:00+09:00 到啦：看完那集', 'an empty tail section drops the tail');
-  assert.match(wakeText({ ...plan, source: 'fallback', note: '' }, now, 'UTC', '09:00', own), /^【我的时间】早上了，新的一天。我上次没说接下来做什么，就按平常的时间起来。$/, 'sections it leaves out keep the shipped wording; its empty tail applies to every alarm');
+  assert.match(wakeText({ ...plan, source: 'fallback', note: '' }, now, 'UTC', '09:00', own), /^【我的时间】（这是我自己的闹钟，不是别人在跟我说话。）早上了，新的一天。我上次没说接下来做什么，就按平常的时间起来。想做什么就定下来去做，不用回话。$/, 'sections it leaves out keep the shipped wording; its empty tail applies to every alarm');
   await rm(file); await mkdir(file);
   const broken = readAlarmMessages(file);
   assert.match(broken.error!, /闹钟模板 .* 读不了，先用默认的/);
-  assert.match(wakeText(plan, now, 'UTC', '09:00', broken), /^【我的时间】2026-10-23T12:00:00\+00:00 到了，这是我说好做到的时间/);
+  assert.match(wakeText(plan, now, 'UTC', '09:00', broken), /^【我的时间】（这是我自己的闹钟，不是别人在跟我说话。）2026-10-23T12:00:00\+00:00 到了，这是我说好做到的时间/);
 });
 test('templates can use her names, and her note is never read as a template', async t => {
   const file = join(await tempDir(t), 'alarm.md');

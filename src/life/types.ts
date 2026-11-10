@@ -55,4 +55,25 @@ export interface LifeOptions {
   schedule(): DailySchedule;
   /** Her alarm wording; the shipped `templates/alarm.md` when absent or missing. */
   alarmFile?: string;
+  /**
+   * 生活线自己发起的消息（不是主人发来的）由这两个开关控制，**默认都关**，装配层显式传 true 才发。
+   *
+   * 【为什么需要开关】这两类消息都是插件用 `agent.steer()` 投进她会话的 `user` 消息，模型看到的
+   * 就是"有人说了句话"，于是天然会回一句；可它们的内容只是她自己的时间线，回出来就成了
+   * 「七点半就叫我」这种对着主人说的话，整轮转发还会把它推到主人手机上（0.9.3 已另修）。
+   *
+   * 【earlyStop】提前停下自查：她比自己的闹钟早 5 分钟以上收工、这一轮又没人说话时，插件问一句
+   * 「现在才几点，这一轮就停了」。停用时 `askIfDoneEarly()` 第一行就返回，连 `alarm.nudged`
+   * 都不落盘；等她下次真提前收工、而开关又打开了，仍然会问。
+   *
+   * 【dailyReview】每日回顾：23:00 那条"先写日记，再看自己"的提醒。停用时 `nextJob()` 不再返回
+   * review 任务，`start()` 还会把 `life.json` 里已排的 `review` 删掉——连带没有日记、
+   * 「我是谁」快照（`keepSelfCopy`，只在回顾里拍）和回顾后的压缩（`afterReview`）。
+   * 她的日记本来就是靠这条提醒写的（现存那篇的落盘时间正是 23:00:09），所以装配层保留它。
+   *
+   * 【现状】`src/index.ts` 传 `dailyReview: true`，不传 `earlyStop`。
+   * 【恢复/停用】只改装配层，不用动 runtime 里的实现。
+   */
+  earlyStop?: boolean;
+  dailyReview?: boolean;
 }

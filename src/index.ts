@@ -301,7 +301,16 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const personaFile = config.personaFile || join(worldDir, 'persona.md');
   const worldPromptFile = config.worldPromptFile || join(worldDir, 'world-prompt.md');
   const roomDir = join(worldDir, 'room');
-  const options: LifeOptions = { worldDir, roomDir, diaryDir: config.diaryDir || join(worldDir, 'diary'), selfFile, schedule: () => ({ review: power.reviewTime(), wake: power.wakeTime() }), timeZone: config.timeZone, alarmFile: config.alarmTemplateFile || join(worldDir, 'alarm.md') };
+  /**
+   * 生活线自消息的两个开关（见 `LifeOptions.earlyStop` / `dailyReview`），这里定这个世界的取向：
+   * - 自查（提前停下）**不传**，即停用：那句「现在才几点，这一轮就停了」只是在问她，
+   *   却会被当成对话回一句；她本来就该自己做主，先关。
+   * - 每日回顾**传 true**，保留：她的日记就是靠 23:00 那条提醒写的（现存那篇的落盘时间正是 23:00:09），
+   *   关掉等于没有日记，也连带没有「我是谁」的历史快照（keepSelfCopy）和回顾后的压缩（afterReview）。
+   *   少说话的部分改在文案：`templates/alarm.md` 的「每日回顾」末尾加了
+   *   「写完就去做别的，不用在这儿汇报。」，不用再关整条回顾。
+   */
+  const options: LifeOptions = { worldDir, roomDir, diaryDir: config.diaryDir || join(worldDir, 'diary'), selfFile, schedule: () => ({ review: power.reviewTime(), wake: power.wakeTime() }), timeZone: config.timeZone, alarmFile: config.alarmTemplateFile || join(worldDir, 'alarm.md'), dailyReview: true };
   /** The name in her persona comes first, then the configured one. */
   const names = () => worldNames({ ...config, companionName: readPersona(personaFile).名字 || config.companionName });
   // 生活线存储建不起来只登记故障：控制台必须还能打开，好让她看见坏在哪里、去修。
