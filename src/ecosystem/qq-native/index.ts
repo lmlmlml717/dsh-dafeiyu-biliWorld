@@ -485,6 +485,27 @@ export function createQqNativeModule(deps: {
   }
 
   /**
+   * 她主动找主人：`reach_out` 的 QQ 出口（0.9.4）。
+   *
+   * 【与另外两条的区别】`forwardOwnTurns` 推的是"她这一轮说过的话"，`share` 队列推的是"一条视频"；
+   * 这条是"她想现在就说一句"——直接私聊主人，不等下一轮、也不带标题。
+   * 云服务器上没有桌面通知，`reach_out` 原来只有 toast/outlets 两条通道，等于发不出去；这条给它补上 QQ。
+   *
+   * 【失败】QQ 关着、没配主人、通道没连上、静默中都抛错——`reach_out` 的规则是「所有通道都失败才报错」，
+   * 抛出去她才看得见"这句没送到"，不会以为你已经收到了。静默是"别吵他"，所以不排队、直接报没发。
+   */
+  async function reachOwner(text: string): Promise<void> {
+    const config = settings();
+    if (!config.enabled) throw new Error('QQ 通道没开');
+    const owner = ownerId(config);
+    if (!owner) throw new Error('没配主人 QQ');
+    if (client?.getState() !== 'online') throw new Error('QQ 没连上');
+    const until = mutedUntil(config);
+    if (until) throw new Error(`静默中（到 ${until}），这条没发`);
+    await say('private', owner, text);
+  }
+
+  /**
    * 「想给你看这条」：她跑 `bili.mjs share` 写进队列，这里轮询到就私聊发给主人。
    *
    * 与 `forwardOwnTurns` 分开：那条转发的是她这一轮说的话（可能只说「刷到一个视频」，链接就丢了），
@@ -573,6 +594,8 @@ export function createQqNativeModule(deps: {
 
   return {
     status,
+    /** 她主动找主人（reach_out 的 QQ 出口）：静默、离线、没配主人都抛错，见函数注释。 */
+    reachOwner,
     /**
      * 面板上拨的那些：会不会自己回、静默到几点（null 立刻恢复）、白名单（整组换掉，空数组谁都不收）、
      * 阳台端口（当场关掉重开那条线，0 就是关），以及手动拉起 SnowLuma 一次。一次请求里给的几项一起生效。

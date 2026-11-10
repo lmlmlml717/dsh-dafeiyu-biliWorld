@@ -207,6 +207,21 @@ test('0.9.3：整轮转发只认 B 站唤醒，提前停下和闹钟都不推', 
   assert.equal(qq.transport.sent.length, 1, 'B 站唤醒里她的分享要推给主人');
 });
 
+test('0.9.4：reach_out 的 QQ 出口直接私聊主人；静默和没配主人都报没送到', async t => {
+  // 云服务器上没有桌面通知，这条出口让她主动找主人时还有一条能到的路。
+  const qq = await channel(t, '在', { ownerQQ: '100' });
+  await qq.module.reachOwner('我想你了');
+  await settle(600);
+  assert.deepEqual(qq.transport.sent, [{ to: '100', parts: '我想你了' }]);
+
+  const muted = await channel(t, '在', { ownerQQ: '100', mutedUntil: new Date(Date.now() + 3_600_000).toISOString() });
+  await assert.rejects(() => muted.module.reachOwner('在吗'), /静默中/, '静默不排队，直接报没发');
+  assert.deepEqual(muted.transport.sent, []);
+
+  const noOwner = await channel(t, '在', { ownerQQ: '', allowPrivate: [] });
+  await assert.rejects(() => noOwner.module.reachOwner('在吗'), /没配主人/);
+});
+
 test('主人本人的私聊，每条消息前缀都标「（你主人）」；别人不标', async t => {
   // 她记忆被清过之后，只看到名字「伙伴」对不上人，回的是「我认识的人里没有一个这么说话的」。
   // 所以这一条要机械地写在她读到的每一句上，不靠她自己推。

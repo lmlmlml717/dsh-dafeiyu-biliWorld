@@ -49,7 +49,7 @@ import { createLifeStore, durableWrite } from './life/lifeStore.ts';
 import { toastSupported, windowsToast, type Notifier } from './life/notify.ts';
 import { createLifeRuntime, type LifeRuntime } from './life/runtime.ts';
 import type { LifeOptions } from './life/types.ts';
-import { createOutlet } from './ecosystem/shared/outlets.ts';
+import { createOutlet, type Outlet, type Push } from './ecosystem/shared/outlets.ts';
 import { readPersona, writePersona } from './persona.ts';
 import type { QqNativeModule } from './ecosystem/qq-native/index.ts';
 import { qqRoute } from './ecosystem/qq/route.ts';
@@ -533,7 +533,21 @@ function deepMerge_(a: any, b: any): any {
       try {
         // 等上一次停机收完再起：连续开关时不能有两个运行时同时活着。
         await lifeStop;
-        const outlets = config.outlets.map(outlet => createOutlet(outlet, () => host.origin()));
+        // 0.9.4：reach_out 多一条 QQ 私聊出口——她主动找主人时不必只靠桌面通知（云服务器上根本没有 toast），
+        // 也不逼人再架一个中转。qqNative 是在这之后才拉起来的，所以这里晚绑定：没起来就照实抛错，
+        // reach_out 才会告诉她"没送到"。只要 reach 这一种，回复/在忙那些照旧走原来的路。
+        const qqReach: Outlet | undefined = config.qqNative?.enabled ? {
+          name: 'QQ',
+          kinds: ['reach'],
+          async send(push: Push) {
+            if (!qqNative) throw new Error('QQ 通道没开');
+            await qqNative.reachOwner(push.text);
+          },
+        } : undefined;
+        const outlets = [
+          ...config.outlets.map(outlet => createOutlet(outlet, () => host.origin())),
+          ...(qqReach ? [qqReach] : []),
+        ];
         const notifier: Notifier = { ...(config.toast && toastSupported() ? { toast: windowsToast(config.toastAppId || undefined) } : {}), outlets };
         const current = createLifeRuntime({ ctx: lifeCtx, config: { ...config, companionName: names().companion }, options, store: lifeStore, host, notifier, dailyBudget: power.dailyBudget, inWorkspace, photos, alarmContext: now => wechat?.presence(now), afterReview: () => { if (power.compactAfterReview()) homeApply.request(); } });
         life = current; isHome = current.isHome;
