@@ -6,6 +6,7 @@
  * 依赖：@deepseek-ai/dsh-agent、dsh-llm 的事件工具、life/alarmTimer 的 LifeTimers、worldScope。
  * 坑：一轮可能早就开始了（闹钟、压缩、另一扇门的话），所以按顺序而不是按轮次号跟踪：
  * 话进去之后的下一个 turn/end 才是它的结束；只有真正的用户消息会截断回答，其余注入都不算。
+ * 她可能把一段话拆成几条 assistant/message 说，**必须累加**（0.8.25 修过整轮转发，0.9.6 修了回复这条路）。
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
@@ -70,7 +71,14 @@ export function createChannelQueue(name: string, options: { limit: number; timeo
 export async function askTurn(ctx: Context, agent: Agent, words: UserMessage, options: { name: string; inWorld?: InWorld | undefined; context?: UserMessage | undefined; cancelled?: Promise<never> | undefined }): Promise<string> {
   // 没有取消信号时给一个永不 reject 的 promise，后面可以统一 race。
   const cancelled = options.cancelled ?? new Promise<never>(() => {});
-  let admitted = false, failed = false, cut = false, reply = '';
+  let admitted = false, failed = false, cut = false;
+  /**
+   * 最后一次工具之后她连着说的那几段（答复本体）。工具之前的一般是"我先看看"这类过程话，不能当答复；
+   * 但她一句话没说完就被人插话（cut）时，说的那半句就是答复——所以要另留一份 `lastText` 兜底。
+   */
+  const said: string[] = [];
+  let lastText = '';
+  const answer = () => said.length ? said.join('\n\n') : (cut ? lastText : '');
   // Enough to tell, when it fails, which way it went.
   let seen = 0, last = 'none';
   let finish!: () => void;
@@ -87,9 +95,15 @@ export async function askTurn(ctx: Context, agent: Agent, words: UserMessage, op
       }
     }
     if (!admitted) return;
+    // 工具跑过之后，前面那些 assistant 文本只是"我先看看"这类过程话，不是给对方的答复：
+    // 用它当答复会把工具旁白发出去（tests/wechatSending 里那条「空答复不发过程话」就是防这个）。
+    // 0.9.6：所以只收**最后一次工具之后**连着说的那几段——她能连着说几条（中间没有工具），全都要留下。
+    if (event.type === 'tool/result') { said.length = 0; last = 'tool'; return; }
     if (event.type === 'assistant/message') {
       last = 'reply';
-      reply = event.data.message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n');
+      const text = event.data.message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n').trim();
+      // 相邻重复只留一次：同一段被重复产出时不至于原样发两遍。
+      if (text) { lastText = text; if (said[said.length - 1] !== text) said.push(text); }
       if (event.data.interrupted || lastAssistantStreamChunk(event.data.stream, 'finish')?.reason.kind === 'max-tokens') failed = true;
     }
     if (event.type === 'turn/end') {
@@ -105,8 +119,8 @@ export async function askTurn(ctx: Context, agent: Agent, words: UserMessage, op
     // 用 followup 而不是 steer：她空闲时开新的一轮，忙时排到这一轮之后。
     agent.followup(words);
     await Promise.race([finished, cancelled]).catch((error: Error) => { throw new Error(`${error.message}（${trace()}）`, { cause: error }); });
-    if (!admitted || failed || (cut && !reply.trim())) throw new Error(`${options.name} home request did not finish（${trace()}）`);
+    if (!admitted || failed || (cut && !answer().trim())) throw new Error(`${options.name} home request did not finish（${trace()}）`);
   } finally { dispose(); }
   await Promise.race([ctx.sessions.flush(agent.session), cancelled]);
-  return reply;
+  return answer();
 }
