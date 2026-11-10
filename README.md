@@ -9,7 +9,7 @@
 <img width="350" height="350" alt="image" src="https://github.com/user-attachments/assets/767d0883-9993-44d5-ab08-fa2403db3015" />
 <img width="350" height="350" alt="image" src="https://github.com/user-attachments/assets/6dc2f239-c8bf-4463-8697-26c41d1cde59" />
 <img width="350" height="350" alt="image" src="https://github.com/user-attachments/assets/48763b43-8835-4cca-9ab4-0312184b4529" />
-
+[![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/wanglijie34/dsh-session-jump)
 
 
 ## 它能做什么
@@ -140,7 +140,7 @@ node <DSH 自带 pnpm 的入口> add <tgz 的绝对路径> --ignore-scripts
       ownerQQ: ''                # 她自己开口的话推给谁；空着取 allowPrivate 的第一个
 ```
 
-完整字段见 [docs-md/CONFIG-REFERENCE.md](https://github.com/lmlmlml717/dsh-dafeiyu-biliWorld/blob/main/docs-md/CONFIG-REFERENCE.md)。
+完整字段见 [docs-md/CONFIG-REFERENCE.md](https://github.com/lmlmlml717/dsh-dafeiyu-biliWorld/blob/main/docs-md/PARAMETERS.md)。
 
 ### B 站 Cookie
 
@@ -149,7 +149,6 @@ node <DSH 自带 pnpm 的入口> add <tgz 的绝对路径> --ignore-scripts
 ```
 <DSH_HOME>/worlds/<worldId>/bili/credentials.json
 ```
-
 ```json
 { "SESSDATA": "<浏览器 Cookie>", "bili_jct": "<CSRF token>", "buvid3": "<buvid3>" }
 ```
@@ -211,10 +210,6 @@ npm test            # Node 回归测试（TS/JS，不联网）
 npm run build       # 清空 lib/ 后 tsc -p tsconfig.build.json
 npm run test:package
 ```
-
-- 测试里不联网、不发真实内容；B 站/QQ 的写操作都有 fake transport 或闸门。
-- 微信适配器另有 Python 离线测试，见 `src/ecosystem/wechat/windows/README.md`。
-
 
 ---
 
