@@ -3,7 +3,7 @@ import test from 'node:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { biliNightConfig, createDailyBili, scheduleStillFits, MAX_WAKES_PER_DAY, MIN_GAP_MAX } from '../src/bili/dailyBili.ts';
+import { biliNightConfig, createDailyBili, scheduleStillFits, shouldSkipWake, MAX_WAKES_PER_DAY, MIN_GAP_MAX } from '../src/bili/dailyBili.ts';
 
 test('每天次数与最小间隔从 bili.config.json 读，并按允许范围夹紧', () => {
   const base = (night: Record<string, unknown>) => biliNightConfig({ night }, '09:00', '23:00');
@@ -83,4 +83,49 @@ test('快收工跳过的那次不算用掉一次唤醒（0.8.25）', async t => 
   assert.deepEqual(steered, [], '快收工不该投递 prompt');
   const after = JSON.parse(readFileSync(join(dir, 'plan.json'), 'utf8'));
   assert.equal(after.wakes, 0, '跳过的那次不能被记成用掉——次数要留给后面');
+});
+
+test('0.9.5：专注没设时限（until=0）不算「快收工」，不能把唤醒全跳过', async t => {
+  // focus 只写 activity、min 留 0 时，until 是 0，remainMin 恒为 0——旧逻辑读成「还剩 0 分钟」，
+  // 于是她从早到晚每次唤醒都被跳过，日志里一路「本次跳过：她的专注还剩 0 分钟」。
+  assert.equal(shouldSkipWake({ activity: 'bilibili', expired: false, remainMin: 0, until: 0 }), null);
+  assert.equal(shouldSkipWake({ activity: 'bilibili', expired: false, remainMin: 0 }), null, '没带 until 的旧快照同样不拦');
+  assert.equal(shouldSkipWake({ activity: 'bilibili', expired: true, remainMin: 0, until: 1 }), null, '已过期更不拦');
+  assert.match(String(shouldSkipWake({ activity: 'bilibili', expired: false, remainMin: 2, until: Date.now() + 120_000 })), /还剩 2 分钟/);
+
+  // 端到端：有 until=0 的专注，计划照常兑现并投递。
+  const nightPlan = await import('../tools/lib/night-plan.mjs') as any;
+  const dir = mkdtempSync(join(tmpdir(), 'bili-no-deadline-'));
+  const prevData = process.env.WORLD_BILI_DATA_DIR;
+  const prevCfg = process.env.WORLD_BILI_CONFIG;
+  process.env.WORLD_BILI_DATA_DIR = dir;
+  process.env.WORLD_BILI_CONFIG = join(dir, 'bili.config.json');
+  t.after(() => {
+    if (prevData === undefined) delete process.env.WORLD_BILI_DATA_DIR; else process.env.WORLD_BILI_DATA_DIR = prevData;
+    if (prevCfg === undefined) delete process.env.WORLD_BILI_CONFIG; else process.env.WORLD_BILI_CONFIG = prevCfg;
+    rmSync(dir, { recursive: true, force: true });
+  });
+  writeFileSync(join(dir, 'bili.config.json'), JSON.stringify({ night: { wakesPerDay: 3, minGapMin: 1, skipChance: 0 } }));
+  const now = Date.now();
+  const nightCfg = { windows: [{ start: '00:00', end: '24:00', wakes: 3 }], skipChance: 0, minGapMin: 1, maxVideos: 3 };
+  writeFileSync(join(dir, 'plan.json'), JSON.stringify(nightPlan.makePlan(nightCfg, {}, now)));
+  writeFileSync(join(dir, 'focus.json'), JSON.stringify({ activity: 'bilibili', until: 0, setAt: now, min: 0, note: '' }));
+
+  const steered: unknown[] = [];
+  const daily = createDailyBili({
+    home: async () => ({ steer: (message: unknown) => { steered.push(message); } }) as any,
+    flush: async () => {},
+    logger: { warn: () => {}, info: () => {} },
+    timeZone: 'Asia/Shanghai',
+    options: {
+      enabled: () => true, dailyTime: '20:00', dailyMaxVideos: 3, napcatHttp: '', biliMjs: 'tools/bili.mjs',
+      dataDir: dir, wakeTime: '00:00', reviewTime: '24:00', allowWrite: true,
+    },
+  });
+  t.after(() => daily.stop());
+  await daily.triggerNow();
+  daily.stop();
+  assert.equal(steered.length, 1, '没设时限的专注不该挡住唤醒');
+  const after = JSON.parse(readFileSync(join(dir, 'plan.json'), 'utf8'));
+  assert.equal(after.wakes, 1, '这次算用掉一次');
 });

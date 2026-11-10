@@ -115,13 +115,16 @@ export function clearFocus() {
 /** 组装一份好用的快照（提示语里直接念给人听）。 */
 export function focusSnapshot(now = Date.now()) {
   const f = readFocus()
-  if (!f || !f.activity) return { activity: '', label: '', remainMin: 0, expired: false, note: '', setAgoMin: 0 }
+  if (!f || !f.activity) return { activity: '', label: '', remainMin: 0, expired: false, note: '', setAgoMin: 0, until: 0 }
   const until = Number(f.until || 0)
   const remainMin = until ? Math.max(0, Math.round((until - now) / 60_000)) : 0
   return {
     activity: String(f.activity),
     label: labelOf(f.activity),
     remainMin,
+    // 0 表示「没设时限、靠她自己收工」：remainMin 这时恒为 0，但绝不能读成「还剩 0 分钟」。
+    // 宿主 shouldSkipWake 靠 until 区分这两种情况（0.9.5）。
+    until,
     expired: !!until && until <= now,
     note: String(f.note || ''),
     setAgoMin: Math.round((now - Number(f.setAt || now)) / 60_000),

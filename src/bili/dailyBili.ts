@@ -225,15 +225,18 @@ export const SKIP_FOCUS_LEFT_MIN = 5
 
 /**
  * 这次唤醒要不要跳过 —— 只因为「她正在专注、且快结束了」。
- * @param snap focus.focusSnapshot() 的结果；没有专注、已过期或没数字都放行
+ * @param snap focus.focusSnapshot() 的结果；没有专注、已过期、没设时限或没数字都放行
  * @param threshold 剩多少分钟内算「快结束」，默认 SKIP_FOCUS_LEFT_MIN
  * @returns 跳过原因（写日志用）；不该跳过时返回 null
  */
 export function shouldSkipWake(
-  snap: { activity?: string; expired?: boolean; remainMin?: number } | null | undefined,
+  snap: { activity?: string; expired?: boolean; remainMin?: number; until?: number } | null | undefined,
   threshold = SKIP_FOCUS_LEFT_MIN,
 ): string | null {
   if (!snap?.activity || snap.expired) return null
+  // 0.9.5 修：`until = 0` 是「不设时限、靠她自己收工」，此时 remainMin 恒为 0，不是「还剩 0 分钟」。
+  // 以前这里只看 remainMin，于是她从早到晚每次唤醒都被当成"快收工"跳过，B 站一次也叫不醒。
+  if (!Number(snap.until)) return null
   const left = Number(snap.remainMin)
   if (!Number.isFinite(left)) return null
   return left <= threshold ? `她的专注还剩 ${left} 分钟` : null

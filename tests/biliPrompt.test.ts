@@ -87,10 +87,14 @@ test('分享时要求先说清是哪条视频，不能只说“这个”', () =>
 });
 
 test('shouldSkipWake：专注只剩几分钟就跳过，其余情况放行', () => {
+  const until = Date.now() + 30 * 60_000;
   assert.equal(shouldSkipWake(null), null);
-  assert.equal(shouldSkipWake({ activity: 'bilibili', remainMin: 20 }), null);
-  assert.equal(shouldSkipWake({ activity: 'bilibili', remainMin: SKIP_FOCUS_LEFT_MIN }), '她的专注还剩 5 分钟');
-  assert.equal(shouldSkipWake({ activity: 'bilibili', remainMin: 2 }), '她的专注还剩 2 分钟');
-  assert.equal(shouldSkipWake({ activity: 'bilibili', expired: true, remainMin: 1 }), null);
-  assert.equal(shouldSkipWake({ activity: 'bilibili', remainMin: Number.NaN }), null);
+  assert.equal(shouldSkipWake({ activity: 'bilibili', remainMin: 20, until }), null);
+  assert.equal(shouldSkipWake({ activity: 'bilibili', remainMin: SKIP_FOCUS_LEFT_MIN, until }), '她的专注还剩 5 分钟');
+  assert.equal(shouldSkipWake({ activity: 'bilibili', remainMin: 2, until }), '她的专注还剩 2 分钟');
+  assert.equal(shouldSkipWake({ activity: 'bilibili', expired: true, remainMin: 1, until }), null);
+  assert.equal(shouldSkipWake({ activity: 'bilibili', remainMin: Number.NaN, until }), null);
+  // 0.9.5：没设时限（until=0 或快照里没有 until）不是「还剩 0 分钟」，不能拦。
+  assert.equal(shouldSkipWake({ activity: 'bilibili', remainMin: 0, until: 0 }), null);
+  assert.equal(shouldSkipWake({ activity: 'bilibili', remainMin: 0 }), null);
 });
