@@ -4,7 +4,7 @@
 > 加了评论发布、动态发布、视频转发
 > 当前版本 **0.9.2** · 基于 **dsh-world**，融合 **dsh-feiyu** 的评论链路与 **dsh-bili-whale** 的 B 站工具链/调度设计。
 ## 太厉害啦DeepSeek大人  与[dsh-world](https://github.com/chenkezhen480/dsh-world)不兼容（大概，我也没试过，这篇md都是DeepSeek大人写的
-[![release](https://img.shields.io/github/v/release/lmlmlml717/dsh-dafeiyu-biliWorld)](https://github.com/lmlmlml717/dsh-dafeiyu-biliWorld/releases/latest)
+[![release](https://img.shields.io/github/v/release/lmlmlml717/dsh-dafeiyu-biliWorld)](https://github.com/lmlmlml717/dsh-dafeiyu-biliWorld/releases/latest)当前版本：0.2.2-rc.1 下载tgz包，复制路径安装即可
 ---
 <img width="350" height="350" alt="image" src="https://github.com/user-attachments/assets/767d0883-9993-44d5-ab08-fa2403db3015" />
 <img width="350" height="350" alt="image" src="https://github.com/user-attachments/assets/6dc2f239-c8bf-4463-8697-26c41d1cde59" />
