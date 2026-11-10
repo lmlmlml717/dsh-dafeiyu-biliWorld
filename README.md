@@ -85,13 +85,25 @@ node <DSH 自带 pnpm 的入口> add <tgz 的绝对路径> --ignore-scripts
 
 确认 profile 的 `package.json` 里 `dsh.profile.bundles` 含 `dsh-world-bili`，然后重启 DSH。也可以在 DSH 的插件面板里直接安装这个 tgz。
 
-### 装 tgz 时会自动补一套 DSH 内部包
+### peer 与 `@deepseek-ai/dsh-*`
 
-pnpm 会把 peer 里的 `@deepseek-ai/dsh-*` 一并装进 profile，**装到的是 `0.2.1-rc.5`，不是本文所说的 `0.2.2-rc.1`**：peer 区间是 `>=0.2.1-rc.2 <0.3.0-0`，`0.2.2-rc.1` 属预发布版，semver 不认进这个区间，pnpm 只能取同一档里最高的 `0.2.1-rc.5`（实测 `dsh-tools`、`dsh-session`、`dsh-llm`、`dsh-commands` 这批全是）。宿主内核是 `0.2.1-rc.x` 时两边一致、基本无感；不是的话可能碰到 `1 required plugin did not activate`，装完先翻 DSH 日志有没有这句，有就把 profile 里这批包对齐到宿主版本再重启。
+插件把宿主核心包声明成 peer（区间 `>=0.2.1-rc.2 <0.3.0-0`），运行时由 DSH 自己提供；正常装 tgz 时 profile 里**不会**多出这批包（0.9.6 实测：profile 只解析出 `ws`、`dsh-world-bili`、`@snowluma/sdk` 三个包）。
 
-同一批包在 peer 里要 `@deepseek-ai/cordis ~4.0.5`，pnpm 会装成 `4.1.0`，`pnpm peers check` 直接报 unmet。插件自身不直接 import cordis，这条警告不影响安装和运行，**别为了消警告去删 lock 或降级**。
+如果某台机器上 pnpm 真把它们装进了 profile，两件事要留意：
 
-更细的安装、升级、卸载与排障见 [docs-md/DISTRIBUTION.md](https://github.com/lmlmlml717/dsh-dafeiyu-biliWorld/blob/main/docs-md/DISTRIBUTION.md) 和 [INSTALL.md](INSTALL.md)。
+- **预发布版默认不算满足这个区间**：`0.2.2-rc.1` 这类不会被选中，会落到 `0.2.1` / `0.2.1-rc.x`。跟宿主内核版本不一致时，启动可能报 `1 required plugin did not activate`；
+- 看到这句就把 profile 里的 `node_modules/@deepseek-ai` 整个删掉（或对齐到宿主版本）再重启。
+
+`@deepseek-ai/cordis` 有时也会报 unmet peer（要 `~4.0.5`，装上的可能是 `4.1.0`）：插件自身不直接 import cordis，这条警告不影响安装和运行，**别为了消警告去删 lock 或降级**。
+
+装完它还会自己补 `dsh.profile.bundles`、换压缩行（`replaceCompaction` 默认 true）、建 `worlds/<worldId>/`。安装与升级踩的坑见 [NOTES.md](NOTES.md)「安装与升级」。
+
+### 卸载
+
+1. 退出 DSH；
+2. 从 profile 的 `dsh.profile.bundles` 里删掉 `dsh-world-bili`（**不能漏**，否则插件面板会以 `uninstall-blocked` 拒绝卸载）；
+3. 从 `dependencies` 里删掉它，重装 profile 依赖（`node <DSH 自带 pnpm 的入口> install --ignore-scripts`）；
+4. 世界数据在 `<DSH_HOME>/worlds/<worldId>/`，卸载不会删；要清就手动删。
 
 ---
 
@@ -176,7 +188,7 @@ node tools/bili.mjs act dyn --bvid BV1xxxxxxxxx --text "配文" --score 17 --go
 node tools/bili.mjs act dyn --bvid BV1xxxxxxxxx --text "配文" --score 17 --go --also-comment
 ```
 
-命令细节见 `node tools/bili.mjs --help` 和 [docs-md/DISTRIBUTION.md](https://github.com/lmlmlml717/dsh-dafeiyu-biliWorld/blob/main/docs-md/DISTRIBUTION.md)。
+命令细节见 `node tools/bili.mjs --help` 和 [docs-md/PARAMETERS.md](docs-md/PARAMETERS.md)。
 
 ---
 
