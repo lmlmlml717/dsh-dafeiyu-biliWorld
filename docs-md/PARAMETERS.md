@@ -43,15 +43,15 @@
 | `qqNative.enabled` | `false` | QQ 原生通道总开关；打开时 `reach_out` 自动多一条 QQ 私聊出口（§1.1） | `src/index.ts:556` |
 | `qqNative.wsUrl` | `ws://127.0.0.1:3003` | SnowLuma 的 OneBot WS 地址 | `src/ecosystem/qq-native/snowluma.ts` |
 | `qqNative.accessToken` | 空 | OneBot token（空串不传） | 同上 |
-| `qqNative.allowPrivate` | `[]` | 能私聊她的 QQ；**第一个也是「主人」的兜底**（`ownerQQ` 没配时用它） | `qq-native/index.ts:327` |
+| `qqNative.allowPrivate` | `[]` | 能私聊她的 QQ；**第一个也是「主人」的兜底**（`ownerQQ` 没配时用它） | `qq-native/index.ts:329` |
 | `qqNative.ownerQQ` | 空 | **主人**：接收自主发言/分享、也是 `reach_out` 的收件人；空则退回 `allowPrivate[0]`（见 §1.1） | `src/bili/owner.ts:35` |
 | `qqNative.allowGroups` | `[]` | 允许接话的群 | `qq-native/index.ts:326` |
-| `qqNative.autoReply` | `true` | 关掉＝收到不理（不花一轮） | `qq-native/index.ts:379` |
-| `qqNative.contextMessages` | `6` | 每轮带几条上文（夹 1–20） | `qq-native/index.ts:380` |
+| `qqNative.autoReply` | `true` | 关掉＝收到不理（不花一轮） | `qq-native/index.ts:381` |
+| `qqNative.contextMessages` | `6` | 每轮带几条上文（夹 1–20） | `qq-native/index.ts:382` |
 | `qqNative.batchQuietMs` | `10000` | 同会话几句话攒一条再问；0 = 一条一问 | `qq-native/batch.ts` |
-| `qqNative.groupTrigger` | `mention` | 群里只接被叫到的 / 每句都接 | `qq-native/index.ts:262` |
+| `qqNative.groupTrigger` | `mention` | 群里只接被叫到的 / 每句都接 | `qq-native/index.ts:317` |
 | `qqNative.groupKeywords` | `[]` | 命中这些词也算在叫她 | 同上 |
-| `qqNative.mutedUntil` | 空 | 只停嘴不停耳，到点自己醒（ISO） | `qq-native/index.ts:379` |
+| `qqNative.mutedUntil` | 空 | 只停嘴不停耳，到点自己醒（ISO）；也会挡住 `reach_out` 的 QQ 出口 | `qq-native/index.ts:391` |
 | `qqNative.snowlumaHome` | 空 | SnowLuma 目录（看门狗/拉起） | `src/ecosystem/qq/supervisor.ts` |
 | `qqNative.supervise` | `true` | 每 30 秒探端口，不通就拉起 SnowLuma | 同上 |
 | `qqNative.bindHomeSession` | `owner` | 谁和家会话共用入口（owner/all/none） | `src/index.ts:505` |
@@ -74,7 +74,7 @@
 | `outlets` | 配置里有 `kinds` 含 `reach` 的出口 | 你登记的 HTTP 接收端 | 非 2xx 或回 `ok:false` 算失败 |
 | 系统通知 | 只在 Windows 且 `toast: true` | 桌面右下角 | 找不到通知身份就失败 |
 
-- 主人是谁：`qqNative.ownerQQ`，空则 `qqNative.allowPrivate[0]`——`qq-native/index.ts:58` 的 `ownerId`，全模块唯一口径（自主发言推给谁、分享发给谁、标「（你主人）」、`reach_out` 发给谁，四件事同一个人）。
+- 主人是谁：`qqNative.ownerQQ`，空则 `qqNative.allowPrivate[0]`——`qq-native/index.ts:60` 的 `ownerId`，全模块唯一口径（自主发言推给谁、分享发给谁、标「（你主人）」、`reach_out` 发给谁，四件事同一个人）。
 - 规则：每条通道独立成败，**全失败才报错**、部分成功照实汇报（`src/life/tools.ts` 文件头「坑」）。
 - 云服务器上没有 toast，所以实际就是「QQ 私聊 + outlets」两条；QQ 在线她就找得到你。
 - 静默（`qqNative.mutedUntil`）连这条一起挡：静默是「别吵他」，不排队、直接回没发。
@@ -219,7 +219,7 @@
 | `act dyn` | `--bvid`、`--text`、`--score 0-20`、`--go`、`--also-comment`/`--no-comment` | 带 `--bvid` = 转发（必须过 minScore）；不带 = 纯动态 |
 | `act comment` | 转交 `comment.mjs`：`--bvid`、`--message`、`--go`、`--force` | `--force` 只跳过概率抽签 |
 | `quota` | `show`（默认）/ `check --type --target` / `record --type --target --note` | 账本 `quota.json` |
-| `focus` | `<bilibili\|rest\|off>`、`--min N`、`--note`；无参=看现状 | 写 `focus.json` |
+| `focus` | `<bilibili\|rest\|off>`、`--min N`、`--note`；无参=看现状 | 写 `focus.json`；`--min 0`（或不写）= 不设时限，这时不会因为「快收工」跳过 B 站唤醒 |
 | `share` | `--bvid`/`--url`（二选一）、`--title`、`--say`、`--list`、`--json` | 写 `owner-outbox.jsonl`，不联网 |
 
 退出码：`0` 成功/干跑通过；`1` 被闸门或接口拒绝；`2` 参数不合法。
@@ -232,7 +232,7 @@
 |---|---|---|
 | 12 | 每天最多唤醒次数（硬上限） | `src/bili/dailyBili.ts:44` |
 | 1 / 240 | `minGapMin` 允许范围（分钟） | `dailyBili.ts:46,48` |
-| 5 | 专注剩 ≤5 分钟就跳过唤醒 | `dailyBili.ts:224` |
+| 5 | 专注剩 ≤5 分钟就跳过唤醒；**只对设了时限的专注生效**（`--min 0` / `until = 0` 永远不因此跳过，0.9.5） | `dailyBili.ts:225` |
 | 0.6 | 窗口每小时折算几次「看+转」 | `session-limit.mjs:104` |
 | [2,4] | 窗口算不出时的兜底名额 | `session-limit.mjs:107` |
 | 20 | feed 一次最多输出几条 | `feed.mjs:107` |
@@ -269,7 +269,7 @@
 | 23:00 | 回顾时间默认值 | `life/alarm.ts:28` |
 | 5 min | 闹钟断线保护分段检查 | `life/alarmTimer.ts:31` |
 | 5 min | 「她卡住了」判定 | `life/runtime.ts:55` |
-| 回顾开、自查关 | 生活线自消息：`LifeOptions.earlyStop` 不传即停用；`dailyReview: true` 保留（日记/「我是谁」快照/回顾后压缩靠它） | `src/index.ts:313`、`src/life/types.ts:58` |
+| 回顾开、自查关 | 生活线自消息：`LifeOptions.earlyStop` 不传即停用；`dailyReview: true` 保留（日记/「我是谁」快照/回顾后压缩靠它） | `src/index.ts:313`、`src/life/types.ts:77` |
 | 4000 字 | 「我是谁」长度上限 | `self.ts:15` || 20 / 100 / 4000 | 记忆查找默认/最多条数、读取上限 | `memory.ts:50` |
 | 2 MB / 2000 个 | 单记忆源文件上限 / 每目录文件数 | `memoryFiles.ts:29` |
 | 20 MB | 相册单张上限 | `life/photos.ts:20` |
@@ -307,3 +307,5 @@
 11. **云服务器上没有桌面通知**：`toastSupported()` 只认 Windows，`toast` 写 `true` 也没用；`reach_out` 在云上原来只剩 outlets 一条路，0.9.4 起内置了 QQ 私聊出口（§1.1）。
 12. **静默会挡 `reach_out`**：`qqNative.mutedUntil` 没到点时，她主动找你也发不出去，`reach_out` 会报「静默中（到 …），这条没发」；静默不排队。
 13. **整轮转发只认 B 站唤醒（0.9.3）**：闹钟、每日回顾、提前停下这些轮次不再推给主人，只在她的会话里出现；`lifeKind` 加新值也不会自动开始转发。
+14. **`focus` 的 `remainMin: 0` 有两种意思**：设了时限且刚到点（此时 `expired: true`）、完全没设时限（`until: 0`）。**只有 `until > 0` 时 `remainMin` 才表示「还剩几分钟」**；0.9.5 之前把 `until: 0` 读成「还剩 0 分钟」，导致每次 B 站唤醒都被跳过——现在 `shouldSkipWake` 先看 `until`。
+15. **`focus` 只有三种活动**：`bilibili` / `rest` / `off`；「在看书」只能写进 `--note`，不参与是否跳过的判断。

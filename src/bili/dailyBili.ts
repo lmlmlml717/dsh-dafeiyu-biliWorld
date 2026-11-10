@@ -220,7 +220,8 @@ function writePlan(dataDir: string, state: any): void {
 // act dyn 的 --score 必须过这一关；---BILI_ACTION--- 打分块是本实现加的，debrief 输出、她填 0–20 的整数。
 // 提示词里「先不带 --go 干跑、确认后再 --go」对应工具链的分层写闸：dailyBili.allowWrite（评论的真发总开关）、
 // guard.dryRun（默认干跑）、额度（quota.check）、风控（最小间隔、复读、-412 熔断），具体次序见 tools/。
-/** 她的专注只剩这么多分钟时，这一次唤醒直接跳过：快收工的人被叫，只会觉得在催她。 */
+/** 她的专注只剩这么多分钟时，这一次唤醒直接跳过：快收工的人被叫，只会觉得在催她。
+ *  只对**设了时限**的专注生效（`--min > 0`）；`--min 0` 是不设时限，`until` 为 0，永远不因此跳过（0.9.5）。 */
 export const SKIP_FOCUS_LEFT_MIN = 5
 
 /**
