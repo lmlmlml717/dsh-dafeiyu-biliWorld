@@ -130,18 +130,14 @@ node <DSH 自带 pnpm 的入口> add <tgz 的绝对路径> --ignore-scripts
       dailyTime: '20:00'        # 只作为工具链异常时的兜底
       dailyMaxVideos: 10
       allowWrite: false         # 真发总开关，确认后再改 true
-      napcatHttp: 'http://127.0.0.1:3000'
       ownerQQ: ''               # 可选，摘要发到这个 QQ
-
-    qqNative:
-      enabled: false
-      wsUrl: 'ws://127.0.0.1:3001'
-      accessToken: ''           # SnowLuma 的 WS 服务端 token
-      allowPrivate: []          # 允许私聊的 QQ
-      allowGroups: []           # 允许的群
-      ownerQQ: ''
-      snowlumaHome: ''          # SnowLuma 安装目录
-      supervise: false
+# qq部分与dsh-world         
+   qqNative:                    # 插件自己连 OneBot（原生通道）；不写这一块就是不接 QQ
+      enabled: false             # 打开通道：连上、控制台里出 QQ 卡
+      wsUrl: ws://127.0.0.1:3003 # OneBot 的 WS 服务地址（不是 HTTP 那个）
+      accessToken: ''            # OneBot WS 服务端自己的 token，与 HTTP 那份不是一码事
+      allowPrivate: []           # 谁能私聊她；留空 = 谁都不理
+      ownerQQ: ''                # 她自己开口的话推给谁；空着取 allowPrivate 的第一个
 ```
 
 完整字段见 [docs-md/CONFIG-REFERENCE.md](https://github.com/lmlmlml717/dsh-dafeiyu-biliWorld/blob/main/docs-md/CONFIG-REFERENCE.md)。
